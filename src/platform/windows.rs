@@ -2161,6 +2161,11 @@ pub fn prepare_custom_client_update() -> ResultType<bool> {
 }
 
 pub fn get_license_from_exe_name() -> ResultType<CustomServer> {
+    // PCEP: build Pc&P Desk (válido ou não) nunca aceita servidor/chave/API vindos do nome do .exe
+    // (nem do RUSTDESK_APPNAME do empacotador portátil): tudo vem do que foi embutido na compilação.
+    if pcep::embedded().is_some() {
+        bail!("PCEP: servidor/chave/API pelo nome do executável estão desativados neste build");
+    }
     let mut exe = std::env::current_exe()?.to_str().unwrap_or("").to_owned();
     // if defined portable appname entry, replace original executable name with it.
     if let Ok(portable_exe) = std::env::var(PORTABLE_APPNAME_RUNTIME_ENV_KEY) {

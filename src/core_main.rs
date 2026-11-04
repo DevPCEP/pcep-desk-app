@@ -487,7 +487,8 @@ pub fn core_main() -> Option<CoreMainAction> {
             }
             return None;
         } else if args[0] == "--config" {
-            if args.len() == 2 && !args[0].contains("host=") {
+            // PCEP: em build Pc&P Desk, servidor/chave/API não podem ser trocados por `--config`.
+            if args.len() == 2 && !args[0].contains("host=") && pcep::embedded().is_none() {
                 if crate::platform::is_installed() && is_root() {
                     // encrypted string used in renaming exe.
                     let name = if args[1].ends_with(".exe") {
