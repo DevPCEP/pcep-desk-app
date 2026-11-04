@@ -21,7 +21,7 @@ Lidas com `option_env!` pelo crate `libs/pcep`. No CI vêm de *Repository variab
 | Variável | Conteúdo |
 |---|---|
 | `PCEP_VARIANTE` | `cliente` ou `colaborador` (sem ela, o build é o RustDesk normal) |
-| `PCEP_SERVIDOR` | host ou host:porta do hbbs |
+| `PCEP_SERVIDOR` | só o host do servidor (nome ou IPv4, ex.: `desk.exemplo.com.br`), sem porta, `http://` ou barras; o RustDesk usa as portas padrão (21116 hbbs, 21117 hbbr). IPv6 não é suportado |
 | `PCEP_CHAVE` | conteúdo de `id_ed25519.pub` (base64 de 32 bytes) |
 | `PCEP_API` | URL `http://` ou `https://` do painel |
 

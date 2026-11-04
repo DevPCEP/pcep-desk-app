@@ -72,6 +72,7 @@ pub enum ConfigError {
     MissingVariant,
     UnknownVariant(String),
     MissingServer,
+    InvalidServer,
     MissingKey,
     InvalidKey,
     MissingApi,
@@ -88,6 +89,10 @@ impl fmt::Display for ConfigError {
                 "PCEP_VARIANTE desconhecida: \"{v}\" (use cliente ou colaborador)"
             ),
             ConfigError::MissingServer => write!(f, "PCEP_SERVIDOR não foi definida"),
+            ConfigError::InvalidServer => write!(
+                f,
+                "PCEP_SERVIDOR deve ser só o endereço do servidor (ex.: desk.exemplo.com.br ou 192.168.0.10), sem porta, http:// ou barras"
+            ),
             ConfigError::MissingKey => write!(f, "PCEP_CHAVE não foi definida"),
             ConfigError::InvalidKey => write!(
                 f,
@@ -112,6 +117,8 @@ fn non_empty(s: Option<&str>) -> Option<&str> {
     s.map(str::trim).filter(|s| !s.is_empty())
 }
 
+// Checagem por substring, conservadora de propósito: qualquer coisa que mencione
+// rustdesk.com (inclusive subdomínios, maiúsculas ou barra final) é recusada.
 fn is_public(s: &str) -> bool {
     s.to_ascii_lowercase().contains("rustdesk.com")
 }
@@ -125,6 +132,11 @@ pub fn validate(raw: RawValues) -> Result<BuildValues, ConfigError> {
     let server = non_empty(raw.server).ok_or(ConfigError::MissingServer)?;
     if is_public(server) {
         return Err(ConfigError::PublicServer);
+    }
+    // Só o host (nome ou IPv4): portas padrão do RustDesk (21116 hbbs, 21117 hbbr).
+    // IPv6 fora de escopo (contém `:`).
+    if server.contains(|c: char| c == ':' || c == '/' || c.is_whitespace()) {
+        return Err(ConfigError::InvalidServer);
     }
 
     let key = non_empty(raw.key).ok_or(ConfigError::MissingKey)?;
@@ -281,6 +293,68 @@ mod tests {
         assert_eq!(
             validate(raw(Some("cliente"), Some(" "), Some(KEY), Some(API))).unwrap_err(),
             ConfigError::MissingServer
+        );
+    }
+
+    #[test]
+    fn validate_rejects_server_with_port() {
+        assert_eq!(
+            validate(raw(Some("cliente"), Some("desk.x:21116"), Some(KEY), Some(API)))
+                .unwrap_err(),
+            ConfigError::InvalidServer
+        );
+    }
+
+    #[test]
+    fn validate_rejects_server_with_scheme() {
+        assert_eq!(
+            validate(raw(Some("cliente"), Some("https://desk.x"), Some(KEY), Some(API)))
+                .unwrap_err(),
+            ConfigError::InvalidServer
+        );
+    }
+
+    #[test]
+    fn validate_rejects_server_with_path() {
+        assert_eq!(
+            validate(raw(Some("cliente"), Some("desk.x/abc"), Some(KEY), Some(API)))
+                .unwrap_err(),
+            ConfigError::InvalidServer
+        );
+        assert_eq!(
+            validate(raw(Some("cliente"), Some("desk x"), Some(KEY), Some(API))).unwrap_err(),
+            ConfigError::InvalidServer
+        );
+    }
+
+    #[test]
+    fn validate_accepts_ipv4() {
+        let b = validate(raw(Some("cliente"), Some("192.168.0.10"), Some(KEY), Some(API)))
+            .unwrap();
+        assert_eq!(b.server, "192.168.0.10");
+    }
+
+    #[test]
+    fn validate_public_check_ignores_case_and_trailing_slash() {
+        assert_eq!(
+            validate(raw(
+                Some("cliente"),
+                Some("RS-NY.RustDesk.COM"),
+                Some(KEY),
+                Some(API)
+            ))
+            .unwrap_err(),
+            ConfigError::PublicServer
+        );
+        assert_eq!(
+            validate(raw(
+                Some("cliente"),
+                Some(SERVER),
+                Some(KEY),
+                Some("https://admin.rustdesk.com/")
+            ))
+            .unwrap_err(),
+            ConfigError::PublicServer
         );
     }
 
