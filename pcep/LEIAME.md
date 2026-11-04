@@ -10,7 +10,7 @@ O fork gera dois aplicativos a partir do mesmo código, escolhidos na compilaç�
 | `PCEP_VARIANTE` | `cliente` | `colaborador` |
 | APP_NAME (técnico) | `PcepDesk` | `PcepDeskEquipe` |
 | Nome de exibição | Pc&P Desk | Pc&P Desk Equipe |
-| Nome do binário | `pcep-desk` | `pcep-desk-equipe` |
+| Nome do binário (APP_NAME em minúsculas, como `RustDesk` → `rustdesk`) | `pcepdesk` | `pcepdeskequipe` |
 | Identificador (macOS/Linux) | `br.com.pcepcontabil.desk` | `br.com.pcepcontabil.desk.equipe` |
 | Papel | só recebe conexões | conecta aos clientes (exige login) |
 
@@ -38,14 +38,14 @@ Entregáveis (nomes fixos, sem versão, para links estáveis `releases/latest/do
 | Plataforma | cliente | colaborador |
 |---|---|---|
 | Windows x64 (portátil) | `PcepDesk-Windows-x64.exe` | `PcepDeskEquipe-Windows-x64.exe` |
-| Linux x86_64 | `PcepDesk-Linux-x86_64.AppImage` | `PcepDeskEquipe-Linux-x86_64.deb` |
+| Linux x86_64 | `PcepDesk-Linux-x86_64.AppImage` | `PcepDeskEquipe-Linux-x86_64.AppImage` |
 | macOS | `PcepDesk-macOS-x64.dmg`, `PcepDesk-macOS-arm64.dmg` | `PcepDeskEquipe-macOS-x64.dmg`, `PcepDeskEquipe-macOS-arm64.dmg` |
 
 ### Pendências do empacotamento
 
 - **Sem assinatura de código em nenhuma plataforma.** Os passos de assinatura (Windows), codesign e notarização (macOS) do upstream foram deixados de fora: não há certificados. Windows mostra o aviso do SmartScreen e o macOS exige liberar o app em Ajustes → Privacidade e Segurança (ou `xattr -d com.apple.quarantine`).
-- O workflow ajusta em tempo de build dois arquivos do upstream que fixam o nome `rustdesk`: `build.py` (caminho `RustDesk.app` ao copiar o binário `service`, macOS) e `appimage/AppImageBuilder-x86_64.yml` (`exec: usr/share/rustdesk/rustdesk`). Cada ajuste é guardado por `grep`: se o upstream mudar a linha, o job falha em vez de gerar um pacote quebrado.
-- O `.deb` do upstream (`build.py`, `res/DEBIAN/postinst`, `res/rustdesk.service`, `res/rustdesk*.desktop`) ainda instala em `/usr/share/rustdesk/` e cria o link `/usr/bin/rustdesk -> /usr/share/rustdesk/rustdesk`, que não existe mais (o binário é `pcep-desk-equipe`). O pacote é gerado, mas a instalação e o serviço systemd precisam ser adaptados à variante antes de o `.deb` ser usado.
+- `pcep/aplicar-variante.sh` ajusta, além dos nomes, dois arquivos do upstream que fixam o nome `rustdesk`: `build.py` (caminho `RustDesk.app` ao copiar o binário `service`, macOS) e `appimage/AppImageBuilder-x86_64.yml` (`exec: usr/share/rustdesk/rustdesk`). Cada ajuste falha se a linha do upstream não casar mais, em vez de gerar um pacote quebrado. O script precisa de GNU sed (`brew install gnu-sed` no macOS) e tolera arquivos CRLF.
+- **Pacote `.deb` não publicado.** O empacotamento deb do upstream (`build.py`, `res/DEBIAN/postinst`, `res/rustdesk.service`, `res/rustdesk*.desktop`) ainda está preso ao nome `rustdesk`: `Package: rustdesk`, instalação em `/usr/share/rustdesk/`, link `/usr/bin/rustdesk -> /usr/share/rustdesk/rustdesk` (que não existe mais) e `systemctl start rustdesk` no `postinst`. O `.deb` é gerado só como insumo do AppImage; para publicá-lo é preciso adaptar Package/postinst/service/desktop à variante.
 - `res/scalable.svg` (ícone do menu no Linux) não é gerado por `pcep/icones/gerar.sh`; continua sendo o do RustDesk.
 - O executável portátil do Windows (`libs/portable`) herda o ícone de `res/icon.ico` (já do Pc&P Desk), mas os metadados de versão (`ProductName`, `FileDescription`) vêm de `libs/portable/Cargo.toml` e ainda dizem "RustDesk".
 

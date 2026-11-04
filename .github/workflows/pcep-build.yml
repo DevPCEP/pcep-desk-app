@@ -17,8 +17,10 @@
 #
 # Entregáveis (nomes fixos, sem versão, para links estáveis do painel):
 #   PcepDesk-Windows-x64.exe        PcepDeskEquipe-Windows-x64.exe
-#   PcepDesk-Linux-x86_64.AppImage  PcepDeskEquipe-Linux-x86_64.deb
+#   PcepDesk-Linux-x86_64.AppImage  PcepDeskEquipe-Linux-x86_64.AppImage
 #   PcepDesk-macOS-{x64,arm64}.dmg  PcepDeskEquipe-macOS-{x64,arm64}.dmg
+# O .deb é só um passo intermediário do AppImage (não é publicado: o
+# empacotamento deb do upstream ainda está preso ao nome rustdesk).
 name: Pc&P Desk - build das variantes
 
 on:
@@ -68,9 +70,19 @@ jobs:
       - name: Conferir PCEP_SERVIDOR, PCEP_CHAVE e PCEP_API
         shell: bash
         run: |
-          set -u
+          set -euo pipefail
           erro=0
           falha() { echo "::error::$1"; erro=1; }
+
+          # Quebra de linha ou aspas em qualquer das três quebram o YAML/shell
+          # dos jobs e não têm uso legítimo aqui.
+          for nome in PCEP_SERVIDOR PCEP_CHAVE PCEP_API; do
+            valor="${!nome}"
+            case "${valor}" in
+              *$'\n'*|*$'\r'*) falha "${nome} contém quebra de linha" ;;
+              *\"*|*\'*)       falha "${nome} contém aspas" ;;
+            esac
+          done
 
           if [ -z "${PCEP_SERVIDOR}" ]; then
             falha "PCEP_SERVIDOR está vazia"
@@ -86,7 +98,11 @@ jobs:
           if [ -z "${PCEP_CHAVE}" ]; then
             falha "PCEP_CHAVE está vazia"
           else
-            bytes="$(printf '%s' "${PCEP_CHAVE}" | base64 -d 2>/dev/null | wc -c)"
+            # 32 bytes em base64 são sempre 43 caracteres do alfabeto + "=".
+            if ! printf '%s' "${PCEP_CHAVE}" | grep -qE '^[A-Za-z0-9+/]{43}=$'; then
+              falha "PCEP_CHAVE deve ser o conteúdo de id_ed25519.pub: 43 caracteres base64 seguidos de '='"
+            fi
+            bytes="$( (printf '%s' "${PCEP_CHAVE}" | base64 -d 2>/dev/null || true) | wc -c)"
             if [ "${bytes}" != "32" ]; then
               falha "PCEP_CHAVE deve ser o conteúdo de id_ed25519.pub (base64 de 32 bytes); decodificou ${bytes} bytes"
             fi
@@ -118,8 +134,9 @@ jobs:
           ESCOLHA: ${{ github.event.inputs.variante || 'ambas' }}
         run: |
           set -euo pipefail
-          cliente='{"variante":"cliente","binario":"pcep-desk","app":"PcepDesk"}'
-          colaborador='{"variante":"colaborador","binario":"pcep-desk-equipe","app":"PcepDeskEquipe"}'
+          # binario = APP_NAME em minúsculas (ver pcep/aplicar-variante.sh)
+          cliente='{"variante":"cliente","binario":"pcepdesk","app":"PcepDesk"}'
+          colaborador='{"variante":"colaborador","binario":"pcepdeskequipe","app":"PcepDeskEquipe"}'
           case "${ESCOLHA}" in
             ambas)       variantes="[${cliente},${colaborador}]" ;;
             cliente)     variantes="[${cliente}]" ;;
@@ -208,6 +225,11 @@ jobs:
           script: |
             core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
             core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      - name: Checkout com LF (sem autocrlf)
+        # PCEP: o runner Windows converte para CRLF por padrão; o checkout em LF
+        # evita finais de linha mistos nos arquivos que aplicar-variante.sh edita.
+        run: git config --global core.autocrlf false
 
       - name: Checkout source code
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -380,16 +402,13 @@ jobs:
   # ---------------------------------------------------------------------------
   # Linux x86_64: copiado de build-rustdesk-linux (entrada x86_64), sem rpm,
   # suse e Arch. A compilação roda num contêiner ubuntu18.04 (run-on-arch-action);
-  # as variáveis PCEP_* entram pelo input `env` da ação. Gera o .deb das duas
-  # variantes; o do colaborador é entregável, o do cliente alimenta o AppImage.
+  # as variáveis PCEP_* entram pelo input `env` da ação. Gera o .deb de cada
+  # variante só como insumo do job `appimage` (não é publicado).
   # ---------------------------------------------------------------------------
   linux:
     name: Linux x86_64 (${{ matrix.job.variante }})
     needs: [validar, ponte, icones]
     runs-on: ubuntu-22.04
-    permissions:
-      contents: read
-      packages: write # run-on-arch-action guarda a imagem do contêiner no ghcr.io quando recebe githubToken
     strategy:
       fail-fast: false
       matrix:
@@ -398,7 +417,7 @@ jobs:
       PCEP_VARIANTE: ${{ matrix.job.variante }}
       TARGET: x86_64-unknown-linux-gnu
       VCPKG_TRIPLET: x64-linux
-      ENTREGAVEL: ${{ matrix.job.app }}-Linux-x86_64.deb
+      DEB: ${{ matrix.job.app }}-Linux-x86_64.deb
     steps:
       - name: Export GitHub Actions cache environment variables
         uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410 # v6
@@ -499,7 +518,8 @@ jobs:
         with:
           arch: x86_64
           distro: ubuntu18.04
-          githubToken: ${{ github.token }}
+          # Sem githubToken: o upstream o usa para guardar a imagem do contêiner no
+          # ghcr.io, o que exigiria packages: write. Aceitamos perder esse cache.
           # PCEP: variáveis lidas por option_env! dentro do contêiner.
           env: |
             PCEP_VARIANTE: "${{ matrix.job.variante }}"
@@ -605,36 +625,34 @@ jobs:
             test -x "flutter/build/linux/x64/release/bundle/${{ matrix.job.binario }}" || { echo "::error::bundle sem ${{ matrix.job.binario }} (BINARY_NAME não foi aplicado?)"; exit 1; }
             ls -l rustdesk-*.deb
             [ "$(ls rustdesk-*.deb | wc -l)" = "1" ] || { echo "::error::esperado exatamente um .deb"; exit 1; }
-            mkdir -p entregaveis
-            mv rustdesk-*.deb "entregaveis/${{ env.ENTREGAVEL }}"
-            ls -l entregaveis
+            mkdir -p deb
+            mv rustdesk-*.deb "deb/${{ env.DEB }}"
+            ls -l deb
 
-      - name: Publicar artifact deb-${{ matrix.job.variante }} (alimenta o AppImage)
+      - name: Publicar artifact deb-${{ matrix.job.variante }} (insumo do AppImage)
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: deb-${{ matrix.job.variante }}
-          path: ./entregaveis/${{ env.ENTREGAVEL }}
-          if-no-files-found: error
-
-      - name: Publicar artifact ${{ env.ENTREGAVEL }}
-        if: matrix.job.variante == 'colaborador'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: entregavel-${{ env.ENTREGAVEL }}
-          path: ./entregaveis/${{ env.ENTREGAVEL }}
+          path: ./deb/${{ env.DEB }}
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------
-  # AppImage (só cliente): copiado de build-appimage (entrada x86_64).
+  # AppImage x86_64 (as duas variantes): copiado de build-appimage (entrada
+  # x86_64). aplicar-variante.sh aponta o `exec:` da receita para o binário.
   # ---------------------------------------------------------------------------
   appimage:
-    name: AppImage x86_64 (cliente)
+    name: AppImage x86_64 (${{ matrix.job.variante }})
     needs: [validar, linux]
-    if: contains(needs.validar.outputs.variantes, '"cliente"')
     runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        job: ${{ fromJSON(needs.validar.outputs.variantes) }}
     env:
-      PCEP_BINARIO: pcep-desk
-      ENTREGAVEL: PcepDesk-Linux-x86_64.AppImage
+      PCEP_VARIANTE: ${{ matrix.job.variante }}
+      PCEP_BINARIO: ${{ matrix.job.binario }}
+      DEB: ${{ matrix.job.app }}-Linux-x86_64.deb
+      ENTREGAVEL: ${{ matrix.job.app }}-Linux-x86_64.AppImage
     steps:
       - name: Checkout source code
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -644,7 +662,7 @@ jobs:
       - name: Download Binary
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: deb-cliente
+          name: deb-${{ matrix.job.variante }}
           path: .
 
       - name: Baixar ícones do Pc&P Desk sobre a árvore
@@ -655,19 +673,14 @@ jobs:
 
       - name: Rename Binary
         run: |
-          mv PcepDesk-Linux-x86_64.deb appimage/rustdesk.deb
+          mv "${DEB}" appimage/rustdesk.deb
 
-      - name: Apontar a receita do AppImage para o binário da variante
-        # PCEP: build.py instala o bundle em usr/share/rustdesk/, mas o executável
-        # agora se chama pcep-desk. Ajuste feito aqui para não tocar o arquivo do
-        # upstream; o grep garante que o padrão ainda existe.
+      - name: Aplicar variante ${{ matrix.job.variante }}
         shell: bash
         run: |
           set -euo pipefail
-          receita=appimage/AppImageBuilder-x86_64.yml
-          grep -q '^    exec: usr/share/rustdesk/rustdesk$' "${receita}"
-          sed -i "s|^    exec: usr/share/rustdesk/rustdesk$|    exec: usr/share/rustdesk/${PCEP_BINARIO}|" "${receita}"
-          grep -n '^    exec:' "${receita}"
+          bash pcep/aplicar-variante.sh "${PCEP_VARIANTE}"
+          grep -n '^    exec:' appimage/AppImageBuilder-x86_64.yml
 
       - name: Build appimage package
         shell: bash
@@ -755,6 +768,8 @@ jobs:
           else
               brew install pkg-config
           fi
+          # PCEP: aplicar-variante.sh precisa de GNU sed (usa `gsed` se existir).
+          brew install gnu-sed
 
       - name: Install NASM
         run: |
@@ -835,19 +850,8 @@ jobs:
           set -euo pipefail
           bash pcep/aplicar-variante.sh "${PCEP_VARIANTE}"
           grep -n 'PRODUCT_NAME\|PRODUCT_BUNDLE_IDENTIFIER' flutter/macos/Runner/Configs/AppInfo.xcconfig
-          echo "PCEP_VARIANTE=${PCEP_VARIANTE} PCEP_SERVIDOR=${PCEP_SERVIDOR} PCEP_API=${PCEP_API}"
-
-      - name: Apontar build.py para o .app da variante
-        # PCEP: build.py copia o binário `service` para dentro de RustDesk.app
-        # (nome fixo), mas PRODUCT_NAME agora é PcepDesk/PcepDeskEquipe. Ajuste
-        # feito aqui para não tocar o arquivo do upstream; o grep garante que o
-        # padrão ainda existe. perl porque o sed do macOS é BSD.
-        shell: bash
-        run: |
-          set -euo pipefail
-          grep -q 'Release/RustDesk.app/Contents/MacOS/' build.py
-          perl -pi -e 's/Release\/RustDesk\.app\/Contents\/MacOS\//Release\/${{ matrix.job.app }}.app\/Contents\/MacOS\//g' build.py
           grep -n "${{ matrix.job.app }}.app" build.py
+          echo "PCEP_VARIANTE=${PCEP_VARIANTE} PCEP_SERVIDOR=${PCEP_SERVIDOR} PCEP_API=${PCEP_API}"
 
       - name: Setup vcpkg with Github Actions binary cache
         uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11
