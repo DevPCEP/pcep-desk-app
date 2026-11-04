@@ -12,6 +12,7 @@
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde_json::{json, Map, Value};
 use std::fmt;
+use std::sync::OnceLock;
 
 /// Variante do aplicativo, escolhida na compilação.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -67,7 +68,7 @@ pub struct BuildValues {
 }
 
 /// Motivo da rejeição dos valores de compilação.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ConfigError {
     MissingVariant,
     UnknownVariant(String),
@@ -168,7 +169,15 @@ pub fn validate(raw: RawValues) -> Result<BuildValues, ConfigError> {
 
 /// Valores embutidos na compilação. `None` quando `PCEP_VARIANTE` não foi definida
 /// (build de desenvolvimento = RustDesk normal).
+///
+/// A decodificação/validação roda uma única vez; as chamadas seguintes devolvem uma cópia
+/// do resultado em cache (é chamada a cada tradução de texto da interface).
 pub fn embedded() -> Option<Result<BuildValues, ConfigError>> {
+    static CACHE: OnceLock<Option<Result<BuildValues, ConfigError>>> = OnceLock::new();
+    CACHE.get_or_init(compute_embedded).clone()
+}
+
+fn compute_embedded() -> Option<Result<BuildValues, ConfigError>> {
     let variant = option_env!("PCEP_VARIANTE")?;
     Some(validate(RawValues {
         variant: Some(variant),
@@ -523,5 +532,10 @@ mod tests {
             "PCEP_VARIANTE desconhecida: \"x\" (use cliente ou colaborador)"
         );
         assert!(!ConfigError::PublicServer.to_string().is_empty());
+    }
+
+    #[test]
+    fn embedded_em_cache_devolve_sempre_o_mesmo_resultado() {
+        assert_eq!(format!("{:?}", embedded()), format!("{:?}", embedded()));
     }
 }
