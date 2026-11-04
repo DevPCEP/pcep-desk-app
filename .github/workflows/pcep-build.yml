@@ -1,0 +1,958 @@
+# PCEP: workflow do fork. Compila as duas variantes do Pc&P Desk (cliente e
+# colaborador) para Windows x64, Linux x86_64 e macOS (x64 e arm64) e publica
+# release em tags `pcep-v*`.
+#
+# Os passos de compilação foram COPIADOS de .github/workflows/flutter-build.yml
+# (jobs build-for-windows-flutter, build-rustdesk-linux, build-appimage e
+# build-for-macOS), com as mesmas versões de toolchain e as mesmas ações
+# fixadas por commit. Ao sincronizar com o upstream, compare este arquivo com
+# o flutter-build.yml novo. O que foi deixado de fora: assinatura e
+# notarização (sem certificados), MSI, Android, iOS, web, sciter, flatpak,
+# rpm, Arch, metadados de atualização.
+#
+# Antes de cada compilação: baixa a ponte flutter_rust_bridge (bridge.yml do
+# upstream), baixa os ícones gerados (job `icones`), roda
+# pcep/aplicar-variante.sh e exporta PCEP_VARIANTE/PCEP_SERVIDOR/PCEP_CHAVE/
+# PCEP_API, lidos por `option_env!` no crate libs/pcep.
+#
+# Entregáveis (nomes fixos, sem versão, para links estáveis do painel):
+#   PcepDesk-Windows-x64.exe        PcepDeskEquipe-Windows-x64.exe
+#   PcepDesk-Linux-x86_64.AppImage  PcepDeskEquipe-Linux-x86_64.deb
+#   PcepDesk-macOS-{x64,arm64}.dmg  PcepDeskEquipe-macOS-{x64,arm64}.dmg
+name: Pc&P Desk - build das variantes
+
+on:
+  workflow_dispatch:
+    inputs:
+      variante:
+        description: "Variante a compilar"
+        type: choice
+        options:
+          - ambas
+          - cliente
+          - colaborador
+        default: ambas
+  push:
+    tags:
+      - "pcep-v*"
+
+permissions:
+  contents: read
+
+env:
+  # Toolchain: mesmos valores do flutter-build.yml do upstream.
+  RUST_VERSION: "1.75"
+  SCITER_RUST_VERSION: "1.75" # o job Windows (flutter) do upstream usa esta variável
+  MAC_RUST_VERSION: "1.81"
+  LLVM_VERSION: "15.0.6"
+  FLUTTER_VERSION: "3.24.5"
+  FLUTTER_MACOS_ARM_VERSION: "3.44.9"
+  VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+  VCPKG_COMMIT_ID: "9e593bb18ea69cc5095e012465dcd675a822ed0d"
+  # Valores embutidos na compilação (Repository variables, não são segredos).
+  # PCEP_VARIANTE é definida por job, a partir da matriz.
+  PCEP_SERVIDOR: ${{ vars.PCEP_SERVIDOR }}
+  PCEP_CHAVE: ${{ vars.PCEP_CHAVE }}
+  PCEP_API: ${{ vars.PCEP_API }}
+
+jobs:
+  # Falha antes de compilar se as variáveis estiverem ausentes ou inválidas:
+  # um build de release nunca pode sair sem elas ou apontando para rustdesk.com.
+  # Também monta a matriz de variantes a partir do input.
+  validar:
+    name: Validar variáveis PCEP_*
+    runs-on: ubuntu-22.04
+    outputs:
+      variantes: ${{ steps.matriz.outputs.variantes }}
+    steps:
+      - name: Conferir PCEP_SERVIDOR, PCEP_CHAVE e PCEP_API
+        shell: bash
+        run: |
+          set -u
+          erro=0
+          falha() { echo "::error::$1"; erro=1; }
+
+          if [ -z "${PCEP_SERVIDOR}" ]; then
+            falha "PCEP_SERVIDOR está vazia"
+          else
+            case "${PCEP_SERVIDOR}" in
+              *:*|*/*|*" "*) falha "PCEP_SERVIDOR deve ser só o host (sem porta, http:// ou barras): '${PCEP_SERVIDOR}'" ;;
+            esac
+            if printf '%s' "${PCEP_SERVIDOR}" | grep -qi 'rustdesk\.com'; then
+              falha "PCEP_SERVIDOR não pode apontar para rustdesk.com (servidor público)"
+            fi
+          fi
+
+          if [ -z "${PCEP_CHAVE}" ]; then
+            falha "PCEP_CHAVE está vazia"
+          else
+            bytes="$(printf '%s' "${PCEP_CHAVE}" | base64 -d 2>/dev/null | wc -c)"
+            if [ "${bytes}" != "32" ]; then
+              falha "PCEP_CHAVE deve ser o conteúdo de id_ed25519.pub (base64 de 32 bytes); decodificou ${bytes} bytes"
+            fi
+          fi
+
+          if [ -z "${PCEP_API}" ]; then
+            falha "PCEP_API está vazia"
+          else
+            if ! printf '%s' "${PCEP_API}" | grep -qE '^https?://'; then
+              falha "PCEP_API deve começar com http:// ou https://: '${PCEP_API}'"
+            fi
+            if printf '%s' "${PCEP_API}" | grep -qi 'rustdesk\.com'; then
+              falha "PCEP_API não pode apontar para rustdesk.com (servidor público)"
+            fi
+          fi
+
+          if [ "${erro}" -ne 0 ]; then
+            echo "::error::Configure as variáveis PCEP_SERVIDOR, PCEP_CHAVE e PCEP_API em Settings → Secrets and variables → Actions → Variables"
+            exit 1
+          fi
+          echo "PCEP_SERVIDOR=${PCEP_SERVIDOR}"
+          echo "PCEP_API=${PCEP_API}"
+          echo "PCEP_CHAVE: ok (32 bytes)"
+
+      - name: Montar matriz de variantes
+        id: matriz
+        shell: bash
+        env:
+          ESCOLHA: ${{ github.event.inputs.variante || 'ambas' }}
+        run: |
+          set -euo pipefail
+          cliente='{"variante":"cliente","binario":"pcep-desk","app":"PcepDesk"}'
+          colaborador='{"variante":"colaborador","binario":"pcep-desk-equipe","app":"PcepDeskEquipe"}'
+          case "${ESCOLHA}" in
+            ambas)       variantes="[${cliente},${colaborador}]" ;;
+            cliente)     variantes="[${cliente}]" ;;
+            colaborador) variantes="[${colaborador}]" ;;
+            *) echo "::error::variante desconhecida: ${ESCOLHA}"; exit 1 ;;
+          esac
+          echo "variantes=${variantes}" >> "${GITHUB_OUTPUT}"
+          echo "Variantes: ${variantes}"
+
+  # Ponte flutter_rust_bridge, como o upstream gera (dois artifacts:
+  # bridge-artifact para Flutter 3.24.5 e bridge-artifact-flutter-3.44 para o
+  # macOS arm64). As Tasks 6/7 adicionam funções FFI novas, por isso é gerada
+  # a cada execução em vez de commitada.
+  ponte:
+    needs: [validar]
+    uses: ./.github/workflows/bridge.yml
+
+  # WindowInjection.dll (modo privacidade do Windows), como o upstream.
+  topmost-windows:
+    needs: [validar]
+    uses: ./.github/workflows/third-party-RustDeskTempTopMostWindow.yml
+    with:
+      upload-artifact: true
+      target: windows-2022
+      configuration: Release
+      platform: x64
+      target_version: Windows10
+
+  # Ícones do Pc&P Desk gerados a partir dos SVG em pcep/icones (não são
+  # commitados). O artifact tem a mesma estrutura de pastas do repositório e
+  # é baixado sobre a árvore nos jobs de build.
+  icones:
+    name: Gerar ícones
+    needs: [validar]
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Instalar ferramentas
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y librsvg2-bin imagemagick icnsutils
+
+      - name: Gerar ícones
+        shell: bash
+        run: |
+          set -euo pipefail
+          SAIDA="${RUNNER_TEMP}/pcep-icones"
+          mkdir -p "${SAIDA}"
+          PCEP_RAIZ="${SAIDA}" bash pcep/icones/gerar.sh
+          find "${SAIDA}" -type f | sort
+          echo "SAIDA=${SAIDA}" >> "${GITHUB_ENV}"
+
+      - name: Publicar artifact pcep-icones
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pcep-icones
+          path: ${{ env.SAIDA }}
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Windows x64: copiado de build-for-windows-flutter (entrada x86_64), sem
+  # assinatura, MSI e metadados de atualização. Entregável: o executável
+  # portátil único gerado por libs/portable.
+  # ---------------------------------------------------------------------------
+  windows:
+    name: Windows x64 (${{ matrix.job.variante }})
+    needs: [validar, ponte, topmost-windows, icones]
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        job: ${{ fromJSON(needs.validar.outputs.variantes) }}
+    env:
+      PCEP_VARIANTE: ${{ matrix.job.variante }}
+      TARGET: x86_64-pc-windows-msvc
+      VCPKG_TRIPLET: x64-windows-static
+      ENTREGAVEL: ${{ matrix.job.app }}-Windows-x64.exe
+    steps:
+      - name: Export GitHub Actions cache environment variables
+        uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410 # v6
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      - name: Checkout source code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: recursive
+
+      - name: Restore bridge files
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: bridge-artifact
+          path: ./
+
+      - name: Baixar ícones do Pc&P Desk sobre a árvore
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: pcep-icones
+          path: ./
+
+      - name: Aplicar variante ${{ matrix.job.variante }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash pcep/aplicar-variante.sh "${PCEP_VARIANTE}"
+          grep -n 'BINARY_NAME' flutter/windows/CMakeLists.txt
+          echo "PCEP_VARIANTE=${PCEP_VARIANTE} PCEP_SERVIDOR=${PCEP_SERVIDOR} PCEP_API=${PCEP_API}"
+
+      - name: Install LLVM and Clang
+        uses: KyleMayes/install-llvm-action@ebc0426251bc40c7cd31162802432c68818ab8f0 # v2.0.9
+        with:
+          version: ${{ env.LLVM_VERSION }}
+
+      - name: Install flutter
+        id: flutter
+        uses: subosito/flutter-action@2783a3f08e1baf891508463f8c6653c258246225 # v2.12.0; https://github.com/subosito/flutter-action/issues/277
+        with:
+          channel: "stable"
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          architecture: x64
+
+      # https://github.com/flutter/flutter/issues/155685
+      - name: Replace engine with rustdesk custom flutter engine
+        run: |
+          flutter doctor -v
+          flutter precache --windows
+          Invoke-WebRequest -Uri https://github.com/rustdesk/engine/releases/download/main/windows-x64-release.zip -OutFile windows-x64-release.zip
+          Expand-Archive -Path windows-x64-release.zip -DestinationPath windows-x64-release
+          mv -Force windows-x64-release/*  C:/hostedtoolcache/windows/flutter/stable-${{ env.FLUTTER_VERSION }}-x64/bin/cache/artifacts/engine/windows-x64-release/
+
+      - name: Patch flutter
+        shell: bash
+        run: |
+          cp .github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff $(dirname $(dirname $(which flutter)))
+          cd $(dirname $(dirname $(which flutter)))
+          if [[ "3.24.5" == ${{env.FLUTTER_VERSION}} ]]; then
+            git apply flutter_3.24.4_dropdown_menu_enableFilter.diff
+          fi
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: ${{ env.SCITER_RUST_VERSION }}
+          targets: ${{ env.TARGET }}
+          components: "rustfmt"
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          prefix-key: pcep-windows-2022-${{ matrix.job.variante }}
+
+      - name: Setup vcpkg with Github Actions binary cache
+        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11
+        with:
+          vcpkgDirectory: C:\vcpkg
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          doNotCache: false
+
+      - name: Install vcpkg dependencies
+        env:
+          VCPKG_DEFAULT_HOST_TRIPLET: ${{ env.VCPKG_TRIPLET }}
+        run: |
+          if ! $VCPKG_ROOT/vcpkg \
+            install \
+            --triplet ${{ env.VCPKG_TRIPLET }} \
+            --x-install-root="$VCPKG_ROOT/installed"; then
+            find "${VCPKG_ROOT}/" -name "*.log" | while read -r _1; do
+              echo "$_1:"
+              echo "======"
+              cat "$_1"
+              echo "======"
+              echo ""
+            done
+            exit 1
+          fi
+          head -n 100 "${VCPKG_ROOT}/buildtrees/ffmpeg/build-${{ env.VCPKG_TRIPLET }}-rel-out.log" || true
+        shell: bash
+
+      - name: Build rustdesk
+        run: |
+          # Windows: build RustDesk (PCEP_* no ambiente são lidas pelo crate libs/pcep)
+          python3 .\build.py --portable --flutter --skip-portable-pack --hwcodec --vram
+          mv ./flutter/build/windows/x64/runner/Release ./rustdesk
+
+          # Download usbmmidd_v2.zip and extract it to ./rustdesk
+          Invoke-WebRequest -Uri https://github.com/rustdesk-org/rdev/releases/download/usbmmidd_v2/usbmmidd_v2.zip -OutFile usbmmidd_v2.zip
+          Expand-Archive usbmmidd_v2.zip -DestinationPath .
+          Remove-Item -Path usbmmidd_v2\Win32 -Recurse
+          Remove-Item -Path "usbmmidd_v2\deviceinstaller64.exe", "usbmmidd_v2\deviceinstaller.exe", "usbmmidd_v2\usbmmidd.bat"
+          mv -Force .\usbmmidd_v2 ./rustdesk
+
+          # Download printer driver files and extract them to ./rustdesk
+          try {
+            Invoke-WebRequest -Uri https://github.com/rustdesk/hbb_common/releases/download/driver/rustdesk_printer_driver_v4-1.4.zip -OutFile rustdesk_printer_driver_v4-1.4.zip
+            Invoke-WebRequest -Uri https://github.com/rustdesk/hbb_common/releases/download/driver/printer_driver_adapter.zip -OutFile printer_driver_adapter.zip
+            Invoke-WebRequest -Uri https://github.com/rustdesk/hbb_common/releases/download/driver/sha256sums -OutFile sha256sums
+
+            # Check and move the files
+            $checksum_driver = (Select-String -Path .\sha256sums -Pattern '^([a-fA-F0-9]{64}) \*rustdesk_printer_driver_v4-1.4\.zip$').Matches.Groups[1].Value
+            $downloadsum_driver = Get-FileHash -Path rustdesk_printer_driver_v4-1.4.zip -Algorithm SHA256
+            $checksum_adapter = (Select-String -Path .\sha256sums -Pattern '^([a-fA-F0-9]{64}) \*printer_driver_adapter\.zip$').Matches.Groups[1].Value
+            $downloadsum_adapter = Get-FileHash -Path printer_driver_adapter.zip -Algorithm SHA256
+            if ($checksum_driver -eq $downloadsum_driver.Hash -and $checksum_adapter -eq $downloadsum_adapter.Hash) {
+                Write-Output "rustdesk_printer_driver_v4-1.4, checksums match, extract the file."
+                Expand-Archive rustdesk_printer_driver_v4-1.4.zip -DestinationPath .
+                mkdir ./rustdesk/drivers
+                mv -Force .\rustdesk_printer_driver_v4-1.4 ./rustdesk/drivers/RustDeskPrinterDriver
+                Expand-Archive printer_driver_adapter.zip -DestinationPath .
+                mv -Force .\printer_driver_adapter.dll ./rustdesk
+            } elseif ($checksum_driver -ne $downloadsum_driver.Hash) {
+                Write-Output "rustdesk_printer_driver_v4-1.4, checksums do not match, ignore the file."
+            } else {
+                Write-Output "printer_driver_adapter.dll, checksums do not match, ignore the file."
+            }
+          } catch {
+              Write-Host "Ingore the printer driver error."
+          }
+
+      - name: Conferir binário da variante
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls -l ./rustdesk
+          test -f "./rustdesk/${{ matrix.job.binario }}.exe" || { echo "::error::./rustdesk/${{ matrix.job.binario }}.exe não existe (BINARY_NAME não foi aplicado?)"; exit 1; }
+          if [ -f ./rustdesk/rustdesk.exe ]; then echo "::error::./rustdesk/rustdesk.exe existe: a variante não foi aplicada"; exit 1; fi
+
+      - name: Download RustDeskTempTopMostWindow artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: topmostwindow-artifacts-x64
+          path: "./rustdesk"
+
+      - name: Build self-extracted executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          sed -i '/dpiAware/d' res/manifest.xml
+          pushd ./libs/portable
+          pip3 install -r requirements.txt
+          python3 ./generate.py -f ../../rustdesk/ -o . -e ../../rustdesk/${{ matrix.job.binario }}.exe
+          popd
+          mkdir -p ./entregaveis
+          mv ./target/release/rustdesk-portable-packer.exe "./entregaveis/${ENTREGAVEL}"
+          ls -l ./entregaveis
+
+      - name: Publicar artifact ${{ env.ENTREGAVEL }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: entregavel-${{ env.ENTREGAVEL }}
+          path: ./entregaveis/${{ env.ENTREGAVEL }}
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Linux x86_64: copiado de build-rustdesk-linux (entrada x86_64), sem rpm,
+  # suse e Arch. A compilação roda num contêiner ubuntu18.04 (run-on-arch-action);
+  # as variáveis PCEP_* entram pelo input `env` da ação. Gera o .deb das duas
+  # variantes; o do colaborador é entregável, o do cliente alimenta o AppImage.
+  # ---------------------------------------------------------------------------
+  linux:
+    name: Linux x86_64 (${{ matrix.job.variante }})
+    needs: [validar, ponte, icones]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      packages: write # run-on-arch-action guarda a imagem do contêiner no ghcr.io quando recebe githubToken
+    strategy:
+      fail-fast: false
+      matrix:
+        job: ${{ fromJSON(needs.validar.outputs.variantes) }}
+    env:
+      PCEP_VARIANTE: ${{ matrix.job.variante }}
+      TARGET: x86_64-unknown-linux-gnu
+      VCPKG_TRIPLET: x64-linux
+      ENTREGAVEL: ${{ matrix.job.app }}-Linux-x86_64.deb
+    steps:
+      - name: Export GitHub Actions cache environment variables
+        uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410 # v6
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      - name: Maximize build space
+        run: |
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /usr/share/dotnet
+          sudo apt-get update -y
+          sudo apt-get install -y nasm qemu-user-static
+
+      - name: Checkout source code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: recursive
+
+      - name: Set Swap Space
+        uses: pierotofy/set-swap-space@49819abfb41bd9b44fb781159c033dba90353a7c # v1.0
+        with:
+          swap-size-gb: 12
+
+      - name: Free Space
+        run: |
+          df -h
+          free -m
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: ${{ env.TARGET }}
+          components: "rustfmt"
+
+      - name: Save Rust toolchain version
+        run: |
+          RUST_TOOLCHAIN_VERSION=$(cargo --version | awk '{print $2}')
+          echo "RUST_TOOLCHAIN_VERSION=$RUST_TOOLCHAIN_VERSION" >> $GITHUB_ENV
+
+      - name: Disable rust bridge build
+        run: |
+          # only build cdylib
+          sed -i  "s/\[\"cdylib\", \"staticlib\", \"rlib\"\]/\[\"cdylib\"\]/g" Cargo.toml
+
+      - name: Restore bridge files
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: bridge-artifact
+          path: ./
+
+      - name: Baixar ícones do Pc&P Desk sobre a árvore
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: pcep-icones
+          path: ./
+
+      - name: Aplicar variante ${{ matrix.job.variante }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash pcep/aplicar-variante.sh "${PCEP_VARIANTE}"
+          grep -n 'BINARY_NAME\|APPLICATION_ID' flutter/linux/CMakeLists.txt
+          echo "PCEP_VARIANTE=${PCEP_VARIANTE} PCEP_SERVIDOR=${PCEP_SERVIDOR} PCEP_API=${PCEP_API}"
+
+      - name: Setup vcpkg with Github Actions binary cache
+        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11
+        with:
+          vcpkgDirectory: /opt/artifacts/vcpkg
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          doNotCache: false
+
+      - name: Install vcpkg dependencies
+        run: |
+          sudo apt install -y libva-dev && apt show libva-dev
+          if ! $VCPKG_ROOT/vcpkg \
+            install \
+            --triplet ${{ env.VCPKG_TRIPLET }} \
+            --x-install-root="$VCPKG_ROOT/installed"; then
+            find "${VCPKG_ROOT}/" -name "*.log" | while read -r _1; do
+              echo "$_1:"
+              echo "======"
+              cat "$_1"
+              echo "======"
+              echo ""
+            done
+            exit 1
+          fi
+          head -n 100 "${VCPKG_ROOT}/buildtrees/ffmpeg/build-${{ env.VCPKG_TRIPLET }}-rel-out.log" || true
+        shell: bash
+
+      - uses: rustdesk-org/run-on-arch-action@d3fcfbb632b84cf7f6bc772bfaaa2c2f4f8789a8 # no release tag; commit 2026-05-26
+        name: Build rustdesk
+        id: vcpkg
+        with:
+          arch: x86_64
+          distro: ubuntu18.04
+          githubToken: ${{ github.token }}
+          # PCEP: variáveis lidas por option_env! dentro do contêiner.
+          env: |
+            PCEP_VARIANTE: "${{ matrix.job.variante }}"
+            PCEP_SERVIDOR: "${{ env.PCEP_SERVIDOR }}"
+            PCEP_CHAVE: "${{ env.PCEP_CHAVE }}"
+            PCEP_API: "${{ env.PCEP_API }}"
+          setup: |
+            ls -l "${PWD}"
+            ls -l /opt/artifacts/vcpkg/installed
+          dockerRunArgs: |
+            --volume "${PWD}:/workspace"
+            --volume "/opt/artifacts:/opt/artifacts"
+          shell: /bin/bash
+          install: |
+            apt-get update -y
+            echo -e "installing deps"
+            apt-get install -y \
+               build-essential \
+               clang \
+               cmake \
+               curl \
+               gcc \
+               git \
+               g++ \
+               libayatana-appindicator3-dev \
+               libasound2-dev \
+               libclang-10-dev \
+               libgstreamer1.0-dev \
+               libgstreamer-plugins-base1.0-dev \
+               libgtk-3-dev \
+               libpulse-dev \
+               libva-dev \
+               libxcb-randr0-dev \
+               libxcb-shape0-dev \
+               libxcb-xfixes0-dev \
+               libxdo-dev \
+               libxfixes-dev \
+               llvm-10-dev \
+               nasm \
+               ninja-build \
+               pkg-config \
+               tree \
+               python3 \
+               rpm \
+               unzip \
+               wget \
+               xz-utils \
+               libssl-dev
+            # we have libopus compiled by us.
+            apt-get remove -y libopus-dev || true
+            # output devs
+            ls -l ./
+            tree -L 3 /opt/artifacts/vcpkg/installed
+          run: |
+            # PCEP: confirma que as variáveis chegaram ao contêiner
+            echo "PCEP_VARIANTE=${PCEP_VARIANTE} PCEP_SERVIDOR=${PCEP_SERVIDOR} PCEP_API=${PCEP_API}"
+            test -n "${PCEP_VARIANTE}" && test -n "${PCEP_SERVIDOR}" && test -n "${PCEP_CHAVE}" && test -n "${PCEP_API}"
+            # disable git safe.directory
+            git config --global --add safe.directory "*"
+            # rust
+            pushd /opt
+            # do not use rustup, because memory overflow in qemu
+            wget -O rust.tar.gz https://static.rust-lang.org/dist/rust-${{env.RUST_TOOLCHAIN_VERSION}}-${{ env.TARGET }}.tar.gz
+            tar -zxvf rust.tar.gz > /dev/null && rm rust.tar.gz
+            cd rust-${{env.RUST_TOOLCHAIN_VERSION}}-${{ env.TARGET }} && ./install.sh
+            rm -rf rust-${{env.RUST_TOOLCHAIN_VERSION}}-${{ env.TARGET }}
+            # edit config
+            mkdir -p ~/.cargo/
+            echo """
+              [source.crates-io]
+              registry = 'https://github.com/rust-lang/crates.io-index'
+            """ > ~/.cargo/config
+            cat ~/.cargo/config
+            # start build
+            pushd /workspace
+            export VCPKG_ROOT=/opt/artifacts/vcpkg
+            cargo build --locked --lib --features hwcodec,flutter,unix-file-copy-paste --release
+            rm -rf target/release/deps target/release/build
+            rm -rf ~/.cargo
+
+            # Setup Flutter
+            # disable git safe.directory
+            git config --global --add safe.directory "*"
+            export PATH=/opt/flutter/bin:$PATH
+            pushd /opt
+            wget https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_${{ env.FLUTTER_VERSION }}-stable.tar.xz
+            tar xf flutter_linux_${{ env.FLUTTER_VERSION }}-stable.tar.xz
+            flutter doctor -v
+
+            if [[ "3.24.5" == ${{ env.FLUTTER_VERSION }} ]]; then
+              pushd /opt/flutter
+              git apply ${{ github.workspace }}/.github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff
+              popd
+            fi
+
+            # build flutter
+            pushd /workspace
+            export CARGO_INCREMENTAL=0
+            export DEB_ARCH=amd64
+            python3 ./build.py --flutter --skip-cargo
+
+            # PCEP: confere o binário da variante no bundle e renomeia o .deb
+            test -x "flutter/build/linux/x64/release/bundle/${{ matrix.job.binario }}" || { echo "::error::bundle sem ${{ matrix.job.binario }} (BINARY_NAME não foi aplicado?)"; exit 1; }
+            ls -l rustdesk-*.deb
+            [ "$(ls rustdesk-*.deb | wc -l)" = "1" ] || { echo "::error::esperado exatamente um .deb"; exit 1; }
+            mkdir -p entregaveis
+            mv rustdesk-*.deb "entregaveis/${{ env.ENTREGAVEL }}"
+            ls -l entregaveis
+
+      - name: Publicar artifact deb-${{ matrix.job.variante }} (alimenta o AppImage)
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: deb-${{ matrix.job.variante }}
+          path: ./entregaveis/${{ env.ENTREGAVEL }}
+          if-no-files-found: error
+
+      - name: Publicar artifact ${{ env.ENTREGAVEL }}
+        if: matrix.job.variante == 'colaborador'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: entregavel-${{ env.ENTREGAVEL }}
+          path: ./entregaveis/${{ env.ENTREGAVEL }}
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # AppImage (só cliente): copiado de build-appimage (entrada x86_64).
+  # ---------------------------------------------------------------------------
+  appimage:
+    name: AppImage x86_64 (cliente)
+    needs: [validar, linux]
+    if: contains(needs.validar.outputs.variantes, '"cliente"')
+    runs-on: ubuntu-22.04
+    env:
+      PCEP_BINARIO: pcep-desk
+      ENTREGAVEL: PcepDesk-Linux-x86_64.AppImage
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: recursive
+
+      - name: Download Binary
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: deb-cliente
+          path: .
+
+      - name: Baixar ícones do Pc&P Desk sobre a árvore
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: pcep-icones
+          path: ./
+
+      - name: Rename Binary
+        run: |
+          mv PcepDesk-Linux-x86_64.deb appimage/rustdesk.deb
+
+      - name: Apontar a receita do AppImage para o binário da variante
+        # PCEP: build.py instala o bundle em usr/share/rustdesk/, mas o executável
+        # agora se chama pcep-desk. Ajuste feito aqui para não tocar o arquivo do
+        # upstream; o grep garante que o padrão ainda existe.
+        shell: bash
+        run: |
+          set -euo pipefail
+          receita=appimage/AppImageBuilder-x86_64.yml
+          grep -q '^    exec: usr/share/rustdesk/rustdesk$' "${receita}"
+          sed -i "s|^    exec: usr/share/rustdesk/rustdesk$|    exec: usr/share/rustdesk/${PCEP_BINARIO}|" "${receita}"
+          grep -n '^    exec:' "${receita}"
+
+      - name: Build appimage package
+        shell: bash
+        run: |
+          # install libarchive-tools for bsdtar command used in AppImageBuilder.yml
+          sudo apt-get update -y
+          # https://github.com/AppImage/AppImageKit/wiki/FUSE
+          sudo apt-get install -y libarchive-tools libfuse2
+          # set-up appimage-builder
+          # https://github.com/AppImage/AppImageKit/issues/1395
+          sudo pip3 install "setuptools_scm<10"
+          sudo pip3 install git+https://github.com/rustdesk-org/appimage-builder.git
+          # run appimage-builder
+          pushd appimage
+          ./build-apprun.sh x86_64
+          sudo appimage-builder --skip-tests --recipe ./AppImageBuilder-x86_64.yml
+          cmp AppDir/AppRun appimage-build/AppRun/v2.0.0/AppRun-Release-x86_64
+          test -x "AppDir/usr/share/rustdesk/${PCEP_BINARIO}" || { echo "::error::AppDir sem usr/share/rustdesk/${PCEP_BINARIO}"; exit 1; }
+          ls -l ./*.AppImage
+          popd
+          mkdir -p entregaveis
+          [ "$(ls appimage/*.AppImage | wc -l)" = "1" ] || { echo "::error::esperado exatamente um .AppImage"; exit 1; }
+          sudo mv appimage/*.AppImage "entregaveis/${ENTREGAVEL}"
+          sudo chown "$(id -u):$(id -g)" "entregaveis/${ENTREGAVEL}"
+          ls -l entregaveis
+
+      - name: Publicar artifact ${{ env.ENTREGAVEL }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: entregavel-${{ env.ENTREGAVEL }}
+          path: ./entregaveis/${{ env.ENTREGAVEL }}
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # macOS x64 e arm64: copiado de build-for-macOS, sem assinatura, notarização
+  # e metadados de atualização. DMG sem assinatura.
+  # ---------------------------------------------------------------------------
+  macos:
+    name: macOS ${{ matrix.alvo.arch_nome }} (${{ matrix.job.variante }})
+    needs: [validar, ponte, icones]
+    runs-on: ${{ matrix.alvo.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        job: ${{ fromJSON(needs.validar.outputs.variantes) }}
+        alvo:
+          - {
+              target: x86_64-apple-darwin,
+              os: macos-15-intel, # macos-latest or macos-14 use M1 now
+              extra-build-args: "",
+              arch: x86_64,
+              arch_nome: x64,
+              vcpkg-triplet: x64-osx,
+            }
+          - {
+              target: aarch64-apple-darwin,
+              os: macos-14,
+              extra-build-args: "--screencapturekit",
+              arch: aarch64,
+              arch_nome: arm64,
+              vcpkg-triplet: arm64-osx,
+            }
+    env:
+      PCEP_VARIANTE: ${{ matrix.job.variante }}
+      ENTREGAVEL: ${{ matrix.job.app }}-macOS-${{ matrix.alvo.arch_nome }}.dmg
+    steps:
+      - name: Export GitHub Actions cache environment variables
+        uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410 # v6
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      - name: Checkout source code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: recursive
+
+      - name: Install build runtime
+        run: |
+          brew install llvm create-dmg
+          # pkg-config is handled in a separate step, because it may be already installed by `macos-latest`(14.7.1) runner
+          if command -v pkg-config &>/dev/null; then
+              echo "pkg-config is already installed"
+          else
+              brew install pkg-config
+          fi
+
+      - name: Install NASM
+        run: |
+          # Install NASM 2.16.x from official release.
+          # Do NOT use `brew install nasm` which installs NASM 3.x.
+          # NASM 3.x is a complete rewrite with incompatible CLI options and removed features.
+          # aom and other multimedia libraries require NASM 2.x for x86/x86_64 assembly.
+          wget https://www.nasm.us/pub/nasm/releasebuilds/2.16.03/macosx/nasm-2.16.03-macosx.zip
+          unzip nasm-2.16.03-macosx.zip
+          sudo cp nasm-2.16.03/nasm /usr/local/bin/nasm
+          nasm --version
+
+      - name: Install flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          channel: "stable"
+          flutter-version: ${{ matrix.alvo.arch == 'aarch64' && env.FLUTTER_MACOS_ARM_VERSION || env.FLUTTER_VERSION }}
+
+      - name: Keep CocoaPods for Flutter 3.44 (arm64)
+        # 3.44 turns on Swift Package Manager by default, which would migrate Runner.xcodeproj and
+        # move some plugins off CocoaPods; every plugin still ships a podspec.
+        if: ${{ matrix.alvo.arch == 'aarch64' }}
+        run: flutter config --no-enable-swift-package-manager
+
+      - name: Patch flutter
+        # Flutter 3.44 (arm64) already has this dropdown fix.
+        if: ${{ matrix.alvo.arch == 'x86_64' }}
+        run: |
+          cd $(dirname $(dirname $(which flutter)))
+          if [[ "3.24.5" == ${{env.FLUTTER_VERSION}} ]]; then
+            git apply ${{ github.workspace }}/.github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff
+          fi
+
+      - name: Workaround for flutter issue
+        shell: bash
+        run: |
+          cd "$(dirname "$(which flutter)")"
+          # https://github.com/flutter/flutter/issues/133533
+          sed -i -e 's/_setFramesEnabledState(false);/\/\/_setFramesEnabledState(false);/g' ../packages/flutter/lib/src/scheduler/binding.dart
+          grep -n '_setFramesEnabledState(false);' ../packages/flutter/lib/src/scheduler/binding.dart
+
+      - name: Patch RustDesk sources for Flutter 3.44 (arm64)
+        # The script uses GNU `sed -i`, which macOS's BSD sed rejects.
+        if: ${{ matrix.alvo.arch == 'aarch64' }}
+        shell: bash
+        run: |
+          brew install gnu-sed
+          export PATH="$(brew --prefix gnu-sed)/libexec/gnubin:$PATH"
+          bash .github/patches/apply_flutter_3.44_source_patches.sh
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: ${{ env.MAC_RUST_VERSION }}
+          targets: ${{ matrix.alvo.target }}
+          components: "rustfmt"
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          prefix-key: pcep-${{ matrix.alvo.os }}-${{ matrix.job.variante }}
+
+      - name: Restore bridge files
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          # arm64's *.freezed.dart must match the freezed it resolves under Flutter 3.44.
+          name: ${{ matrix.alvo.arch == 'aarch64' && 'bridge-artifact-flutter-3.44' || 'bridge-artifact' }}
+          path: ./
+
+      - name: Baixar ícones do Pc&P Desk sobre a árvore
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: pcep-icones
+          path: ./
+
+      - name: Aplicar variante ${{ matrix.job.variante }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash pcep/aplicar-variante.sh "${PCEP_VARIANTE}"
+          grep -n 'PRODUCT_NAME\|PRODUCT_BUNDLE_IDENTIFIER' flutter/macos/Runner/Configs/AppInfo.xcconfig
+          echo "PCEP_VARIANTE=${PCEP_VARIANTE} PCEP_SERVIDOR=${PCEP_SERVIDOR} PCEP_API=${PCEP_API}"
+
+      - name: Apontar build.py para o .app da variante
+        # PCEP: build.py copia o binário `service` para dentro de RustDesk.app
+        # (nome fixo), mas PRODUCT_NAME agora é PcepDesk/PcepDeskEquipe. Ajuste
+        # feito aqui para não tocar o arquivo do upstream; o grep garante que o
+        # padrão ainda existe. perl porque o sed do macOS é BSD.
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'Release/RustDesk.app/Contents/MacOS/' build.py
+          perl -pi -e 's/Release\/RustDesk\.app\/Contents\/MacOS\//Release\/${{ matrix.job.app }}.app\/Contents\/MacOS\//g' build.py
+          grep -n "${{ matrix.job.app }}.app" build.py
+
+      - name: Setup vcpkg with Github Actions binary cache
+        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11
+        with:
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          doNotCache: false
+
+      - name: Install vcpkg dependencies
+        run: |
+          if ! $VCPKG_ROOT/vcpkg \
+            install \
+            --x-install-root="$VCPKG_ROOT/installed"; then
+            find "${VCPKG_ROOT}/" -name "*.log" | while read -r _1; do
+              echo "$_1:"
+              echo "======"
+              cat "$_1"
+              echo "======"
+              echo ""
+            done
+            exit 1
+          fi
+          head -n 100 "${VCPKG_ROOT}/buildtrees/ffmpeg/build-${{ matrix.alvo.vcpkg-triplet }}-rel-out.log" || true
+
+      - name: Show version information (Rust, cargo, Clang)
+        shell: bash
+        run: |
+          clang --version || true
+          rustup -V
+          rustup toolchain list
+          rustup default
+          cargo -V
+          rustc -V
+
+      - name: Build rustdesk
+        run: |
+          if [ "${{ matrix.alvo.target }}" = "aarch64-apple-darwin" ]; then
+            MIN_MACOS_VERSION="12.3"
+            sed -i -e "s/MACOSX_DEPLOYMENT_TARGET\=[0-9]*.[0-9]*/MACOSX_DEPLOYMENT_TARGET=${MIN_MACOS_VERSION}/" build.py
+            sed -i -e "s/platform :osx, '.*'/platform :osx, '${MIN_MACOS_VERSION}'/" flutter/macos/Podfile
+            sed -i -e "s/osx_minimum_system_version = \"[0-9]*.[0-9]*\"/osx_minimum_system_version = \"${MIN_MACOS_VERSION}\"/" Cargo.toml
+            sed -i -e "s/MACOSX_DEPLOYMENT_TARGET = [0-9]*.[0-9]*;/MACOSX_DEPLOYMENT_TARGET = ${MIN_MACOS_VERSION};/" flutter/macos/Runner.xcodeproj/project.pbxproj
+            echo "MACOSX_DEPLOYMENT_TARGET=${MIN_MACOS_VERSION}" >> "$GITHUB_ENV"
+          fi
+          ./build.py --flutter --hwcodec --unix-file-copy-paste ${{ matrix.alvo.extra-build-args }}
+
+      - name: Conferir .app da variante
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls -l ./flutter/build/macos/Build/Products/Release/
+          test -d "./flutter/build/macos/Build/Products/Release/${{ matrix.job.app }}.app" || { echo "::error::${{ matrix.job.app }}.app não existe (PRODUCT_NAME não foi aplicado?)"; exit 1; }
+          test -f "./flutter/build/macos/Build/Products/Release/${{ matrix.job.app }}.app/Contents/MacOS/service" || { echo "::error::binário service ausente no .app"; exit 1; }
+
+      - name: create unsigned dmg
+        run: |
+          CREATE_DMG="$(command -v create-dmg)"
+          CREATE_DMG="$(readlink -f "$CREATE_DMG")"
+          sed -i -e 's/MAXIMUM_UNMOUNTING_ATTEMPTS=3/MAXIMUM_UNMOUNTING_ATTEMPTS=7/' "$CREATE_DMG"
+          mkdir -p ./entregaveis
+          create-dmg --icon "${{ matrix.job.app }}.app" 200 190 --hide-extension "${{ matrix.job.app }}.app" --window-size 800 400 --app-drop-link 600 185 "./entregaveis/${ENTREGAVEL}" "./flutter/build/macos/Build/Products/Release/${{ matrix.job.app }}.app"
+          ls -l ./entregaveis
+
+      - name: Publicar artifact ${{ env.ENTREGAVEL }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: entregavel-${{ env.ENTREGAVEL }}
+          path: ./entregaveis/${{ env.ENTREGAVEL }}
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Release em tag pcep-v*: só roda se TODOS os builds passaram (um build
+  # quebrado não publica nada). Não é pre-release para que
+  # releases/latest/download/<entregável> funcione como link estável.
+  # ---------------------------------------------------------------------------
+  release:
+    name: Publicar release
+    if: startsWith(github.ref, 'refs/tags/pcep-v')
+    needs: [windows, linux, appimage, macos]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: Baixar entregáveis
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: entregavel-*
+          merge-multiple: true
+          path: ./entregaveis
+
+      - name: Listar entregáveis
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls -l ./entregaveis
+          [ "$(ls ./entregaveis | wc -l)" = "8" ] || { echo "::error::esperados 8 entregáveis"; exit 1; }
+
+      - name: Publish Release
+        uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Pc&P Desk ${{ github.ref_name }}
+          fail_on_unmatched_files: true
+          body: |
+            Pc&P Desk (cliente) e Pc&P Desk Equipe (colaborador) para Windows x64, Linux x86_64 e macOS (x64 e arm64).
+
+            Código-fonte: https://github.com/DevPCEP/pcep-desk-app
+          files: |
+            ./entregaveis/*
