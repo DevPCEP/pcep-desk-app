@@ -429,6 +429,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
 
   Widget buildHelpCards(String updateUrl) {
     if (!bind.isCustomClient() &&
+        !isPcepBuild && // PCEP: sem card de download/atualização do RustDesk
         updateUrl.isNotEmpty &&
         !isCardClosed &&
         bind.mainUriPrefixSync().contains('rustdesk')) {
@@ -662,7 +663,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
                                   ])
                             ]
                           : <Widget>[]) +
-                      (help != null
+                      (help != null && !isPcepBuild // PCEP: sem links de ajuda do rustdesk.com
                           ? <Widget>[
                               Center(
                                   child: InkWell(

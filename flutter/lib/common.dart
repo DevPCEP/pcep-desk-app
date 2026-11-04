@@ -4055,6 +4055,9 @@ bool get isCustomClient {
   return _isCustomClient!;
 }
 
+// PCEP: true quando o build tem a variante Pc&P Desk (cliente ou colaborador).
+bool get isPcepBuild => bind.mainPcepVariantSync() != '';
+
 get defaultOptionLang => isCustomClient ? 'default' : '';
 get defaultOptionTheme => isCustomClient ? 'system' : '';
 get defaultOptionYes => isCustomClient ? 'Y' : '';

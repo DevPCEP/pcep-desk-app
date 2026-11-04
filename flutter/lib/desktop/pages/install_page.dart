@@ -230,6 +230,7 @@ class _InstallPageBodyState extends State<_InstallPageBody>
                         children: [
                           Text(translate('agreement_tip'))
                               .marginOnly(bottom: em),
+                          if (!isPcepBuild) // PCEP: sem link de privacidade do rustdesk.com
                           InkWell(
                             hoverColor: Colors.transparent,
                             onTap: () => launchUrlString(

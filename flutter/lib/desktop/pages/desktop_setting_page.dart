@@ -2615,6 +2615,7 @@ class _AboutState extends State<_About> {
               SelectionArea(
                   child: Text('${translate('ID')}: $myId')
                       .marginSymmetric(vertical: 4.0)),
+              if (!isPcepBuild) // PCEP: sem link de privacidade do rustdesk.com
               InkWell(
                   onTap: () {
                     launchUrlString('https://rustdesk.com/privacy.html');
@@ -2623,6 +2624,7 @@ class _AboutState extends State<_About> {
                     translate('Privacy Statement'),
                     style: linkStyle,
                   ).marginSymmetric(vertical: 4.0)),
+              if (!isPcepBuild) // PCEP: sem link do site do rustdesk.com
               InkWell(
                   onTap: () {
                     launchUrlString('https://rustdesk.com');
@@ -2631,6 +2633,21 @@ class _AboutState extends State<_About> {
                     translate('Website'),
                     style: linkStyle,
                   ).marginSymmetric(vertical: 4.0)),
+              // PCEP: atribuição ao RustDesk e link do código-fonte do fork (exigência da AGPL-3.0)
+              if (isPcepBuild) ...[
+                SelectionArea(
+                    child: Text('Pc&P Desk — baseado no RustDesk (AGPL-3.0)')
+                        .marginSymmetric(vertical: 4.0)),
+                InkWell(
+                    onTap: () {
+                      launchUrlString(
+                          'https://github.com/DevPCEP/pcep-desk-app');
+                    },
+                    child: Text(
+                      'Código-fonte: https://github.com/DevPCEP/pcep-desk-app',
+                      style: linkStyle,
+                    ).marginSymmetric(vertical: 4.0)),
+              ],
               Container(
                 decoration: const BoxDecoration(color: Color(0xFF2c8cff)),
                 padding:
