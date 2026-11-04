@@ -236,6 +236,22 @@ pub fn check_outgoing(variant: Variant, access_token: &str) -> Result<(), &'stat
     }
 }
 
+/// Token enviado ao servidor de rendezvous (hbbs) ao abrir uma conexão de saída.
+///
+/// O cliente do RustDesk só manda o `access_token` para o hbbs (pedido de punch/relay e
+/// health check) e, quando há token, exige antes uma troca de chaves que só o hbbs Pro faz.
+/// O hbbs gratuito (OSS, até 1.1.16) nunca inicia essa troca, então a conexão de um
+/// colaborador logado morre com "Failed to secure tcp: deadline has elapsed". O hbbs OSS
+/// ignora o token de qualquer forma; por isso, no build PCEP ele não é enviado. A exigência
+/// de login continua valendo pelo `check_outgoing` (app) e pelo painel (API).
+pub fn token_for_rendezvous(pcep_build: bool, access_token: &str) -> String {
+    if pcep_build {
+        String::new()
+    } else {
+        access_token.to_owned()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -537,5 +553,15 @@ mod tests {
     #[test]
     fn embedded_em_cache_devolve_sempre_o_mesmo_resultado() {
         assert_eq!(format!("{:?}", embedded()), format!("{:?}", embedded()));
+    }
+
+    #[test]
+    fn rendezvous_token_empty_in_pcep_build() {
+        assert_eq!(token_for_rendezvous(true, "abc"), "");
+    }
+
+    #[test]
+    fn rendezvous_token_kept_outside_pcep_build() {
+        assert_eq!(token_for_rendezvous(false, "abc"), "abc");
     }
 }
