@@ -114,6 +114,11 @@ substitui Cargo.toml "[package.metadata.winres]" 'FileDescription[[:space:]]*=' 
 substitui Cargo.toml "[package.metadata.bundle]" 'name[[:space:]]*='             "name = \"$EXIBICAO\""
 substitui Cargo.toml "[package.metadata.bundle]" 'identifier[[:space:]]*='       "identifier = \"$IDENTIFICADOR\""
 
+# Empacotador portátil (libs/portable): metadados do .exe que o usuário vê.
+substitui libs/portable/Cargo.toml "[package.metadata.winres]" 'OriginalFilename[[:space:]]*=' "OriginalFilename = \"$BINARIO.exe\""
+substitui libs/portable/Cargo.toml "[package.metadata.winres]" 'ProductName[[:space:]]*='      "ProductName = \"$EXIBICAO\""
+substitui libs/portable/Cargo.toml "[package.metadata.winres]" 'FileDescription[[:space:]]*='  "FileDescription = \"$EXIBICAO\""
+
 # Runner.rc (Windows): recursos de versão do executável.
 RC=flutter/windows/runner/Runner.rc
 EXIBICAO_RC="$(dobra_e "$EXIBICAO")"

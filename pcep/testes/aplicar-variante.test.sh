@@ -9,6 +9,7 @@ CR=$'\r'
 
 ALVOS=(
   Cargo.toml
+  libs/portable/Cargo.toml
   flutter/windows/runner/Runner.rc
   flutter/windows/CMakeLists.txt
   flutter/linux/CMakeLists.txt
@@ -55,6 +56,10 @@ verifica_variante() { # raiz binario exibicao exibicao_rc identificador produto_
   espera "$r/Cargo.toml" "ProductName = \"$exib\""
   espera "$r/Cargo.toml" "FileDescription = \"$exib\""
   espera "$r/Cargo.toml" "OriginalFilename = \"$bin.exe\""
+  # Empacotador portátil (libs/portable): metadados winres da variante.
+  espera "$r/libs/portable/Cargo.toml" "ProductName = \"$exib\""
+  espera "$r/libs/portable/Cargo.toml" "FileDescription = \"$exib\""
+  espera "$r/libs/portable/Cargo.toml" "OriginalFilename = \"$bin.exe\""
   espera "$r/Cargo.toml" "name = \"$exib\""
   espera "$r/Cargo.toml" "identifier = \"$id\""
   local rc="$r/flutter/windows/runner/Runner.rc"
@@ -104,6 +109,14 @@ echo "== cliente"
 R2="$TMP/cliente"; nova_raiz "$R2"
 PCEP_RAIZ="$R2" bash "$SCRIPT" cliente >/dev/null 2>&1 || falha "cliente retornou erro"
 verifica_variante "$R2" pcepdesk "Pc&P Desk" "Pc&&P Desk" br.com.pcepcontabil.desk PcepDesk
+
+echo "== libs/portable/Cargo.toml: só as 3 linhas winres mudam; chave ausente falha (código 1)"
+[ "$(diff "$REPO/libs/portable/Cargo.toml" "$R1/libs/portable/Cargo.toml" | grep -c '^[<>]')" = 6 ] || falha "portable: mais/menos de 3 linhas alteradas"
+R10="$TMP/semportable"; nova_raiz "$R10"
+sed -i '/^ProductName = /d' "$R10/libs/portable/Cargo.toml"
+SAIDA="$(PCEP_RAIZ="$R10" bash "$SCRIPT" cliente 2>&1)"; COD=$?
+[ "$COD" = 1 ] || falha "portable sem ProductName deveria sair com 1 (saiu $COD)"
+echo "$SAIDA" | grep -q 'libs/portable/Cargo.toml' || falha "mensagem não cita libs/portable/Cargo.toml: $SAIDA"
 
 echo "== trocar de variante sobre a mesma raiz"
 PCEP_RAIZ="$R1" bash "$SCRIPT" cliente >/dev/null 2>&1 || falha "troca de variante retornou erro"

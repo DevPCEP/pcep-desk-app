@@ -2595,7 +2595,12 @@ class _AboutState extends State<_About> {
       final scrollController = ScrollController();
       return SingleChildScrollView(
         controller: scrollController,
-        child: _Card(title: translate('About RustDesk'), children: [
+        // PCEP: título com o nome de exibição do Pc&P Desk em vez de "About RustDesk".
+        child: _Card(
+            title: isPcepBuild
+                ? 'Sobre o ${bind.mainGetAppDisplayNameSync()}'
+                : translate('About RustDesk'),
+            children: [
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [

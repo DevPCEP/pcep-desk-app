@@ -43,6 +43,8 @@ cp "$TMP/icone-64.png"   "$RAIZ/res/64x64.png"
 cp "$TMP/icone-128.png"  "$RAIZ/res/128x128.png"
 cp "$TMP/icone-256.png"  "$RAIZ/res/128x128@2x.png"
 cp "$TMP/icone-1024.png" "$RAIZ/res/mac-icon.png"
+# Ícone vetorial usado pelos pacotes Linux (.deb/AppImage: build.py e appimage/AppImageBuilder-x86_64.yml)
+cp "$ICONE" "$RAIZ/res/scalable.svg"
 
 # .ico com vários tamanhos (Windows)
 convert "$TMP"/icone-{16,32,48,64,128,256}.png "$RAIZ/res/icon.ico"
