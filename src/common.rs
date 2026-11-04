@@ -2492,7 +2492,44 @@ pub fn rustdesk_interval(i: Interval) -> ThrottledInterval {
     ThrottledInterval::new(i)
 }
 
+// PCEP: o corpo original virou `load_custom_client_file`; `load_custom_client` o chama e
+// depois aplica a configuração embutida (assim ela prevalece, mesmo nos `return` antecipados).
 pub fn load_custom_client() {
+    load_custom_client_file();
+    load_pcep_config();
+}
+
+// PCEP: aplica a configuração embutida na compilação (servidor, chave, API, aceite por clique etc.).
+// Sem `PCEP_VARIANTE` na compilação não faz nada (build RustDesk normal). Idempotente: só
+// sobrescreve os mesmos valores. Configuração inválida encerra o processo: um build quebrado
+// nunca pode rodar apontando para o servidor errado.
+pub fn load_pcep_config() {
+    match pcep::embedded() {
+        None => {}
+        Some(Err(e)) => {
+            // O logger pode ainda não estar ativo nesta fase: também vai para o stderr.
+            eprintln!("PCEP: configuração embutida inválida: {e}");
+            log::error!("PCEP: configuração embutida inválida: {e}");
+            std::process::exit(1);
+        }
+        Some(Ok(v)) => {
+            let serde_json::Value::Object(map) = pcep::custom_client_json(&v) else {
+                log::error!("PCEP: JSON de configuração embutida não é um objeto");
+                std::process::exit(1);
+            };
+            let data: HashMap<String, serde_json::Value> = map.into_iter().collect();
+            apply_custom_client_data(data);
+            // Nunca registrar a chave.
+            log::info!(
+                "PCEP: configuração embutida aplicada (app: {}, servidor: {})",
+                v.variant.app_name(),
+                v.server
+            );
+        }
+    }
+}
+
+fn load_custom_client_file() {
     #[cfg(debug_assertions)]
     if let Ok(data) = std::fs::read_to_string("./custom.txt") {
         read_custom_client(data.trim());
@@ -2604,13 +2641,18 @@ pub fn read_custom_client(config: &str) {
         log::error!("Failed to dec custom client config");
         return;
     };
-    let Ok(mut data) =
+    let Ok(data) = // PCEP: sem `mut`, a remoção de chaves agora é feita em `apply_custom_client_data`
         serde_json::from_slice::<std::collections::HashMap<String, serde_json::Value>>(&data)
     else {
         log::error!("Failed to parse custom client config");
         return;
     };
+    apply_custom_client_data(data);
+}
 
+// PCEP: parte de aplicação extraída de `read_custom_client` (sem mudança de comportamento),
+// para reaproveitar com a configuração embutida.
+pub fn apply_custom_client_data(mut data: HashMap<String, serde_json::Value>) {
     if let Some(app_name) = data.remove("app-name") {
         if let Some(app_name) = app_name.as_str() {
             *config::APP_NAME.write().unwrap() = app_name.to_owned();
