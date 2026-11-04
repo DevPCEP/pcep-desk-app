@@ -372,6 +372,15 @@ pub fn session_get_is_recording(session_id: SessionID) -> SyncReturn<bool> {
 }
 
 pub fn session_reconnect(session_id: SessionID, force_relay: bool) {
+    // PCEP: reconexão também exige login (colaborador) e é sempre bloqueada no cliente
+    if let Err(e) = crate::pcep_check_outgoing() {
+        log::warn!("PCEP: reconexão bloqueada: {}", e);
+        if let Some(session) = sessions::get_session_by_session_id(&session_id) {
+            use crate::client::Interface;
+            session.msgbox("custom-nook-nocancel-hasclose-error", "Error", &e, "");
+        }
+        return;
+    }
     if let Some(session) = sessions::get_session_by_session_id(&session_id) {
         session.reconnect(force_relay);
     }

@@ -4156,7 +4156,6 @@ class FFI {
     // If tabWindowId != null, this session is a "tab -> window" one.
     // Else this session is a new one.
     if (isNewPeer) {
-      // ignore: unused_local_variable
       final addRes = bind.sessionAddSync(
         sessionId: sessionId,
         id: id,
@@ -4172,6 +4171,12 @@ class FFI {
         connToken: connToken,
         loginMethod: loginMethod,
       );
+      // PCEP: conexão bloqueada pelo Rust (sem login / app do cliente): avisa e não inicia a sessão
+      if (addRes != '') {
+        msgBox(sessionId, 'custom-nook-nocancel-hasclose-error',
+            'Error', addRes, '', dialogManager);
+        return;
+      }
     } else if (display != null) {
       if (displays == null) {
         debugPrint(
