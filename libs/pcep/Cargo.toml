@@ -1,0 +1,9 @@
+[package]
+name = "pcep"
+version = "0.1.0"
+edition = "2021"
+description = "Regras das variantes do Pc&P Desk (fork do RustDesk)"
+
+[dependencies]
+serde_json = "1.0"
+base64 = "0.22"
