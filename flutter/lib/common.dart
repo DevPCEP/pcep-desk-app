@@ -2610,6 +2610,32 @@ connect(BuildContext context, String id,
     String? connToken,
     bool? isSharedPassword,
     String loginMethod = ''}) async {
+  // PCEP: o bloqueio de verdade fica no Rust (`session_add_sync`); aqui só o aviso amigável.
+  final pcepVariant = bind.mainPcepVariantSync();
+  if (pcepVariant == 'cliente') {
+    return; // PCEP: o app do cliente nunca inicia conexão de saída
+  }
+  if (pcepVariant == 'colaborador' &&
+      (!isDesktop || desktopType == DesktopType.main) &&
+      !gFFI.userModel.isLogin) {
+    gFFI.dialogManager.show((setState, close, context) => CustomAlertDialog(
+          title: null,
+          content: Text('Faça login no Pc&P Desk Equipe para conectar.'),
+          actions: [
+            dialogButton('Cancelar', onPressed: close, isOutline: true),
+            dialogButton('Entrar', onPressed: () {
+              close();
+              loginDialog();
+            }),
+          ],
+          onSubmit: () {
+            close();
+            loginDialog();
+          },
+          onCancel: close,
+        ));
+    return;
+  }
   if (id == '') return;
   if (!isDesktop || desktopType == DesktopType.main) {
     try {

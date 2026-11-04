@@ -142,6 +142,10 @@ pub fn session_add_existed_sync(
     displays: Vec<i32>,
     is_view_camera: bool,
 ) -> SyncReturn<String> {
+    // PCEP: bloqueia conexão de saída sem login (colaborador) ou sempre (cliente)
+    if let Err(e) = crate::pcep_check_outgoing() {
+        return SyncReturn(e);
+    }
     if let Err(e) = session_add_existed(id.clone(), session_id, displays, is_view_camera) {
         SyncReturn(format!("Failed to add session with id {}, {}", &id, e))
     } else {
@@ -164,6 +168,15 @@ pub fn session_add_sync(
     conn_token: Option<String>,
     login_method: String,
 ) -> SyncReturn<String> {
+    // PCEP: bloqueia conexão de saída sem login (colaborador) ou sempre (cliente). Vale também para
+    // links `<esquema>://` e linha de comando, que abrem a janela remota e chegam aqui.
+    if let Err(e) = crate::pcep_check_outgoing() {
+        // `session_add` não rodou: ainda assim limpa a variável, como o fluxo normal faria.
+        if is_terminal {
+            std::env::remove_var("IS_TERMINAL_ADMIN");
+        }
+        return SyncReturn(e);
+    }
     let add_res = session_add(
         &session_id,
         &id,
@@ -1155,6 +1168,21 @@ pub fn main_get_app_name_sync() -> SyncReturn<String> {
 // PCEP: nome de exibição ("Pc&P Desk") para títulos e textos da interface
 pub fn main_get_app_display_name_sync() -> SyncReturn<String> {
     SyncReturn(crate::get_app_display_name())
+}
+
+// PCEP: variante do app para a interface decidir avisos: "cliente" | "colaborador" | ""
+// (vazio = sem build PCEP ou configuração embutida inválida)
+pub fn main_pcep_variant_sync() -> SyncReturn<String> {
+    SyncReturn(
+        match pcep::embedded() {
+            Some(Ok(v)) => match v.variant {
+                pcep::Variant::Cliente => "cliente",
+                pcep::Variant::Colaborador => "colaborador",
+            },
+            _ => "",
+        }
+        .to_owned(),
+    )
 }
 
 pub fn main_uri_prefix_sync() -> SyncReturn<String> {

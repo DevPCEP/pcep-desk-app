@@ -880,6 +880,11 @@ class RustdeskImpl {
     return mainGetAppNameSync(hint: hint);
   }
 
+  // PCEP: no web não há variante PCEP
+  String mainPcepVariantSync({dynamic hint}) {
+    return '';
+  }
+
   String mainUriPrefixSync({dynamic hint}) {
     throw UnimplementedError("mainUriPrefixSync");
   }

@@ -1223,6 +1223,19 @@ pub fn get_app_display_name() -> String {
     }
 }
 
+// PCEP: bloqueio de conexão de saída (fonte da verdade; a tela só mostra o aviso). O cliente nunca
+// conecta; o colaborador só conecta com login feito no painel (token de acesso presente).
+// Sem build PCEP não bloqueia nada (RustDesk normal).
+pub fn pcep_check_outgoing() -> Result<(), String> {
+    match pcep::embedded() {
+        None => Ok(()),
+        // Configuração inválida: o processo já encerra em `load_pcep_config`; por segurança, bloqueia.
+        Some(Err(e)) => Err(format!("Configuração embutida inválida: {e}")),
+        Some(Ok(v)) => pcep::check_outgoing(v.variant, &LocalConfig::get_option("access_token"))
+            .map_err(|m| m.to_owned()),
+    }
+}
+
 #[inline]
 pub fn is_rustdesk() -> bool {
     hbb_common::config::APP_NAME.read().unwrap().eq("RustDesk")
