@@ -1,5 +1,5 @@
 # PCEP: workflow do fork. Compila as duas variantes do Pc&P Desk (cliente e
-# colaborador) para Windows x64, Linux x86_64 e macOS (x64 e arm64) e publica
+# colaborador) para Windows x64, Linux x86_64 e macOS arm64 e publica
 # release em tags `pcep-v*`.
 #
 # Os passos de compilação foram COPIADOS de .github/workflows/flutter-build.yml
@@ -18,7 +18,7 @@
 # Entregáveis (nomes fixos, sem versão, para links estáveis do painel):
 #   PcepDesk-Windows-x64.exe        PcepDeskEquipe-Windows-x64.exe
 #   PcepDesk-Linux-x86_64.AppImage  PcepDeskEquipe-Linux-x86_64.AppImage
-#   PcepDesk-macOS-{x64,arm64}.dmg  PcepDeskEquipe-macOS-{x64,arm64}.dmg
+#   PcepDesk-macOS-arm64.dmg        PcepDeskEquipe-macOS-arm64.dmg
 # O .deb é só um passo intermediário do AppImage (não é publicado: o
 # empacotamento deb do upstream ainda está preso ao nome rustdesk).
 name: Pc&P Desk - build das variantes
@@ -726,15 +726,10 @@ jobs:
       fail-fast: false
       matrix:
         job: ${{ fromJSON(needs.validar.outputs.variantes) }}
+        # PCEP: macOS Intel (x86_64-apple-darwin, macos-15-intel) removido por decisão do
+        # usuário em 2026-11-04: runners Intel escassos (job cancelado sem runner). Para
+        # voltar, restaurar a entrada x64 copiando de build-for-macOS no flutter-build.yml.
         alvo:
-          - {
-              target: x86_64-apple-darwin,
-              os: macos-15-intel, # macos-latest or macos-14 use M1 now
-              extra-build-args: "",
-              arch: x86_64,
-              arch_nome: x64,
-              vcpkg-triplet: x64-osx,
-            }
           - {
               target: aarch64-apple-darwin,
               os: macos-14,
@@ -946,7 +941,7 @@ jobs:
         run: |
           set -euo pipefail
           ls -l ./entregaveis
-          [ "$(ls ./entregaveis | wc -l)" = "8" ] || { echo "::error::esperados 8 entregáveis"; exit 1; }
+          [ "$(ls ./entregaveis | wc -l)" = "6" ] || { echo "::error::esperados 6 entregáveis"; exit 1; }
 
       - name: Publish Release
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
@@ -955,7 +950,7 @@ jobs:
           name: Pc&P Desk ${{ github.ref_name }}
           fail_on_unmatched_files: true
           body: |
-            Pc&P Desk (cliente) e Pc&P Desk Equipe (colaborador) para Windows x64, Linux x86_64 e macOS (x64 e arm64).
+            Pc&P Desk (cliente) e Pc&P Desk Equipe (colaborador) para Windows x64, Linux x86_64 e macOS Apple Silicon (arm64).
 
             Código-fonte: https://github.com/DevPCEP/pcep-desk-app
           files: |

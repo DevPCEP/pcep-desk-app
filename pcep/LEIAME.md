@@ -39,7 +39,9 @@ Entregáveis (nomes fixos, sem versão, para links estáveis `releases/latest/do
 |---|---|---|
 | Windows x64 (portátil) | `PcepDesk-Windows-x64.exe` | `PcepDeskEquipe-Windows-x64.exe` |
 | Linux x86_64 | `PcepDesk-Linux-x86_64.AppImage` | `PcepDeskEquipe-Linux-x86_64.AppImage` |
-| macOS | `PcepDesk-macOS-x64.dmg`, `PcepDesk-macOS-arm64.dmg` | `PcepDeskEquipe-macOS-x64.dmg`, `PcepDeskEquipe-macOS-arm64.dmg` |
+| macOS Apple Silicon | `PcepDesk-macOS-arm64.dmg` | `PcepDeskEquipe-macOS-arm64.dmg` |
+
+> macOS Intel fora dos builds desde 2026-11-04 (runners `macos-15-intel` escassos). Para voltar, restaurar a entrada x64 da matriz `macos` no `pcep-build.yml`.
 
 ### Pendências do empacotamento
 
