@@ -2616,9 +2616,19 @@ connect(BuildContext context, String id,
   if (pcepVariant == 'cliente') {
     return; // PCEP: o app do cliente nunca inicia conexão de saída
   }
-  if (pcepVariant == 'colaborador' &&
-      (!isDesktop || desktopType == DesktopType.main) &&
-      !gFFI.userModel.isLogin) {
+  final pcepExigeLogin = pcepVariant == 'colaborador' &&
+      (!isDesktop || desktopType == DesktopType.main);
+  if (pcepExigeLogin && gFFI.userModel.isLogin) {
+    // PCEP: revalida o login no painel a cada conexão (colaborador desativado perde o acesso sem
+    // reiniciar o app). 401/400 limpam o token e o login; erro de rede ou painel fora do ar NÃO
+    // bloqueia (o token local continua valendo), por isso o limite de tempo e o try/catch.
+    try {
+      await gFFI.userModel
+          .refreshCurrentUser()
+          .timeout(const Duration(seconds: 5), onTimeout: () {});
+    } catch (_) {}
+  }
+  if (pcepExigeLogin && !gFFI.userModel.isLogin) {
     gFFI.dialogManager.show((setState, close, context) => CustomAlertDialog(
           title: null,
           content: Text('Faça login no Pc&P Desk Equipe para conectar.'),

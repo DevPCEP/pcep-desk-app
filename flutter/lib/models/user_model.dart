@@ -50,7 +50,8 @@ class UserModel {
     });
   }
 
-  void refreshCurrentUser() async {
+  // PCEP: retorna Future<void> (era void) para `connect()` poder aguardar a revalidação do login.
+  Future<void> refreshCurrentUser() async {
     if (bind.isDisableAccount()) return;
     networkError.value = '';
     networkErrorFromServer.value = false;
@@ -83,7 +84,8 @@ class UserModel {
       refreshingUser = false;
       final status = response.statusCode;
       if (status == 401 || status == 400) {
-        reset(resetOther: status == 401);
+        // PCEP: await para o logout terminar antes de quem aguarda o refresh reler `isLogin`.
+        await reset(resetOther: status == 401);
         return;
       }
       final data = json.decode(decode_http_response(response));
