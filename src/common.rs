@@ -1213,6 +1213,16 @@ pub fn get_app_name() -> String {
     hbb_common::config::APP_NAME.read().unwrap().clone()
 }
 
+// PCEP: nome de exibição para a interface ("Pc&P Desk" / "Pc&P Desk Equipe"). Nunca use para
+// caminhos, comandos, nomes de arquivo/processo, esquema de URI ou comparações: para isso
+// existe `get_app_name()` (nome técnico ASCII). Sem build PCEP válido, é igual ao nome técnico.
+pub fn get_app_display_name() -> String {
+    match pcep::embedded() {
+        Some(Ok(v)) => v.variant.display_name().to_owned(),
+        _ => get_app_name(),
+    }
+}
+
 #[inline]
 pub fn is_rustdesk() -> bool {
     hbb_common::config::APP_NAME.read().unwrap().eq("RustDesk")

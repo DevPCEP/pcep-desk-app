@@ -150,7 +150,7 @@ class HomePageState extends State<HomePage> {
         ],
       );
     }
-    return Text(bind.mainGetAppNameSync());
+    return Text(bind.mainGetAppDisplayNameSync()); // PCEP: nome de exibição
   }
 }
 
@@ -166,7 +166,7 @@ class WebHomePage extends StatelessWidget {
       // backgroundColor: MyTheme.grayBg,
       appBar: AppBar(
         centerTitle: true,
-        title: Text("${bind.mainGetAppNameSync()} (Preview)"),
+        title: Text("${bind.mainGetAppDisplayNameSync()} (Preview)"), // PCEP: nome de exibição
         actions: connectionPage.appBarActions,
       ),
       body: connectionPage,

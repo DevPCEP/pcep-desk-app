@@ -875,6 +875,11 @@ class RustdeskImpl {
     return js.context.callMethod('getByName', ['app-name']);
   }
 
+  // PCEP: no web o nome de exibição é o mesmo nome do app
+  String mainGetAppDisplayNameSync({dynamic hint}) {
+    return mainGetAppNameSync(hint: hint);
+  }
+
   String mainUriPrefixSync({dynamic hint}) {
     throw UnimplementedError("mainUriPrefixSync");
   }
