@@ -18,9 +18,11 @@
 # Entregáveis (nomes fixos, sem versão, para links estáveis do painel):
 #   PcepDesk-Windows-x64.exe        PcepDeskEquipe-Windows-x64.exe
 #   PcepDesk-Linux-x86_64.AppImage  PcepDeskEquipe-Linux-x86_64.AppImage
+#   PcepDesk-Linux-x86_64.deb       PcepDeskEquipe-Linux-x86_64.deb
 #   PcepDesk-macOS-arm64.dmg        PcepDeskEquipe-macOS-arm64.dmg
-# O .deb é só um passo intermediário do AppImage (não é publicado: o
-# empacotamento deb do upstream ainda está preso ao nome rustdesk).
+# O .deb usa nomes próprios da variante (Package, /usr/share/<binario>,
+# serviço systemd e .desktop; ver pcep/aplicar-variante.sh), é instalado e
+# removido no job `linux` como teste, é publicado e também alimenta o AppImage.
 name: Pc&P Desk - build das variantes
 
 on:
@@ -403,7 +405,7 @@ jobs:
   # Linux x86_64: copiado de build-rustdesk-linux (entrada x86_64), sem rpm,
   # suse e Arch. A compilação roda num contêiner ubuntu18.04 (run-on-arch-action);
   # as variáveis PCEP_* entram pelo input `env` da ação. Gera o .deb de cada
-  # variante só como insumo do job `appimage` (não é publicado).
+  # variante, testa a instalação/remoção, publica e o entrega ao job `appimage`.
   # ---------------------------------------------------------------------------
   linux:
     name: Linux x86_64 (${{ matrix.job.variante }})
@@ -623,16 +625,58 @@ jobs:
 
             # PCEP: confere o binário da variante no bundle e renomeia o .deb
             test -x "flutter/build/linux/x64/release/bundle/${{ matrix.job.binario }}" || { echo "::error::bundle sem ${{ matrix.job.binario }} (BINARY_NAME não foi aplicado?)"; exit 1; }
-            ls -l rustdesk-*.deb
-            [ "$(ls rustdesk-*.deb | wc -l)" = "1" ] || { echo "::error::esperado exatamente um .deb"; exit 1; }
+            ls -l ${{ matrix.job.binario }}-*.deb
+            [ "$(ls ${{ matrix.job.binario }}-*.deb | wc -l)" = "1" ] || { echo "::error::esperado exatamente um .deb"; exit 1; }
             mkdir -p deb
-            mv rustdesk-*.deb "deb/${{ env.DEB }}"
+            mv ${{ matrix.job.binario }}-*.deb "deb/${{ env.DEB }}"
             ls -l deb
+
+      # O serviço pode não ficar ativo no runner (sem sessão gráfica): só
+      # exigimos que a unit exista e esteja habilitada antes da remoção.
+      - name: Testar instalação do .deb
+        shell: bash
+        env:
+          BIN: ${{ matrix.job.binario }}
+        run: |
+          set -euo pipefail
+          if ! sudo apt-get install -y "./deb/${DEB}"; then
+            systemctl status "${BIN}" --no-pager || true
+            journalctl -u "${BIN}" --no-pager -n 50 || true
+            echo "::error::falha ao instalar ${DEB}"
+            exit 1
+          fi
+          test -x "/usr/share/${BIN}/${BIN}" || { echo "::error::/usr/share/${BIN}/${BIN} ausente"; exit 1; }
+          test -L "/usr/bin/${BIN}" || { echo "::error::/usr/bin/${BIN} não é link"; exit 1; }
+          systemctl cat "${BIN}" > /dev/null || { echo "::error::unit ${BIN}.service não existe"; exit 1; }
+          [ "$(systemctl is-enabled "${BIN}")" = "enabled" ] || { echo "::error::serviço ${BIN} não está habilitado"; exit 1; }
+          test -f "/usr/share/applications/${BIN}.desktop" || { echo "::error::${BIN}.desktop ausente"; exit 1; }
+          test -f "/usr/share/applications/${BIN}-link.desktop" || { echo "::error::${BIN}-link.desktop ausente"; exit 1; }
+          # lib/librustdesk.so é o nome interno da biblioteca do núcleo, fixo no Dart
+          # (native_model.dart) e no CMake; qualquer outro caminho com rustdesk é erro.
+          RESTO="$(dpkg -L "${BIN}" | grep -i rustdesk | grep -v "^/usr/share/${BIN}/lib/librustdesk\.so\$" || true)"
+          if [ -n "${RESTO}" ]; then
+            echo "${RESTO}"
+            echo "::error::o pacote ainda tem caminhos com rustdesk"
+            exit 1
+          fi
+          sudo apt-get remove -y "${BIN}"
+          test ! -e "/usr/bin/${BIN}" || { echo "::error::/usr/bin/${BIN} sobrou após remover"; exit 1; }
+          if systemctl is-enabled "${BIN}"; then
+            echo "::error::serviço ${BIN} continua habilitado após remover"
+            exit 1
+          fi
 
       - name: Publicar artifact deb-${{ matrix.job.variante }} (insumo do AppImage)
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: deb-${{ matrix.job.variante }}
+          path: ./deb/${{ env.DEB }}
+          if-no-files-found: error
+
+      - name: Publicar artifact ${{ env.DEB }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: entregavel-${{ env.DEB }}
           path: ./deb/${{ env.DEB }}
           if-no-files-found: error
 
@@ -698,7 +742,7 @@ jobs:
           ./build-apprun.sh x86_64
           sudo appimage-builder --skip-tests --recipe ./AppImageBuilder-x86_64.yml
           cmp AppDir/AppRun appimage-build/AppRun/v2.0.0/AppRun-Release-x86_64
-          test -x "AppDir/usr/share/rustdesk/${PCEP_BINARIO}" || { echo "::error::AppDir sem usr/share/rustdesk/${PCEP_BINARIO}"; exit 1; }
+          test -x "AppDir/usr/share/${PCEP_BINARIO}/${PCEP_BINARIO}" || { echo "::error::AppDir sem usr/share/${PCEP_BINARIO}/${PCEP_BINARIO}"; exit 1; }
           ls -l ./*.AppImage
           popd
           mkdir -p entregaveis
@@ -941,7 +985,7 @@ jobs:
         run: |
           set -euo pipefail
           ls -l ./entregaveis
-          [ "$(ls ./entregaveis | wc -l)" = "6" ] || { echo "::error::esperados 6 entregáveis"; exit 1; }
+          [ "$(ls ./entregaveis | wc -l)" = "8" ] || { echo "::error::esperados 8 entregáveis"; exit 1; }
 
       - name: Publish Release
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1

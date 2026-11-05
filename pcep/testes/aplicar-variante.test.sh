@@ -16,7 +16,15 @@ ALVOS=(
   flutter/macos/Runner/Configs/AppInfo.xcconfig
   build.py
   appimage/AppImageBuilder-x86_64.yml
+  res/rustdesk.service
+  res/rustdesk.desktop
+  res/rustdesk-link.desktop
+  res/DEBIAN/postinst
+  res/DEBIAN/preinst
+  res/DEBIAN/prerm
+  res/DEBIAN/postrm
 )
+TAB=$'\t'
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -77,7 +85,80 @@ verifica_variante() { # raiz binario exibicao exibicao_rc identificador produto_
   # build.py (macOS): o binário `service` é copiado para dentro do .app da variante.
   espera "$r/build.py" "    system2('cp -rf ../target/release/service ./build/macos/Build/Products/Release/$mac.app/Contents/MacOS/')"
   # Receita do AppImage: executável da variante dentro do bundle instalado por build.py.
-  espera "$r/appimage/AppImageBuilder-x86_64.yml" "    exec: usr/share/rustdesk/$bin"
+  espera "$r/appimage/AppImageBuilder-x86_64.yml" "    exec: usr/share/$bin/$bin"
+  verifica_deb "$r" "$bin" "$exib"
+}
+
+# Pacote .deb: arquivos res/<binario>.*, scripts DEBIAN e build.py.
+verifica_deb() { # raiz binario exibicao
+  local r="$1" bin="$2" exib="$3" f
+  for f in "res/$bin.service" "res/$bin.desktop" "res/$bin-link.desktop"; do
+    [ -f "$r/$f" ] || falha "$f não foi gerado"
+    if grep -qi rustdesk "$r/$f"; then falha "$f ainda menciona rustdesk"; fi
+  done
+  for f in postinst preinst prerm postrm; do
+    if grep -qi rustdesk "$r/res/DEBIAN/$f"; then falha "res/DEBIAN/$f ainda menciona rustdesk"; fi
+  done
+  # Os modelos do upstream ficam intactos (rodar de novo e trocar de variante dependem deles).
+  grep -q '^Name=RustDesk' "$r/res/rustdesk.desktop" || falha "modelo res/rustdesk.desktop foi alterado"
+  espera "$r/res/$bin.service" "Description=$exib"
+  espera "$r/res/$bin.service" "ExecStart=/usr/bin/$bin --service"
+  espera "$r/res/$bin.desktop" "Name=$exib"
+  espera "$r/res/$bin.desktop" "Exec=$bin %u"
+  espera "$r/res/$bin.desktop" "Icon=$bin"
+  espera "$r/res/$bin.desktop" "StartupWMClass=$bin"
+  espera "$r/res/$bin-link.desktop" "MimeType=x-scheme-handler/$bin;"
+  espera "$r/res/$bin-link.desktop" "TryExec=$bin"
+  espera "$r/res/DEBIAN/postinst" "${TAB}ln -f -s /usr/share/$bin/$bin /usr/bin/$bin"
+  espera "$r/res/DEBIAN/postinst" "${TAB}${TAB}systemctl enable $bin"
+  espera "$r/res/DEBIAN/postinst" "${TAB}${TAB}cp /usr/share/$bin/files/systemd/$bin.service /usr/lib/systemd/system/$bin.service"
+  espera "$r/res/DEBIAN/prerm" "${TAB}${TAB}${TAB}systemctl stop $bin || true"
+  espera "$r/res/DEBIAN/postrm" "${TAB}${TAB}rm -rf /root/.config/$bin || true"
+  local b="$r/build.py"
+  espera "$b" "    content = \"\"\"Package: $bin"
+  espera "$b" "Maintainer: PCEP <dev@pcepcontabil.com.br>"
+  espera "$b" "Homepage: https://github.com/DevPCEP/pcep-desk-app"
+  espera "$b" "Description: $exib"
+  espera "$b" "    system2('mkdir -p tmpdeb/usr/share/$bin')"
+  espera "$b" "        'cp ../res/$bin.service tmpdeb/usr/share/$bin/files/systemd/')"
+  espera "$b" "        'cp ../res/$bin-link.desktop tmpdeb/usr/share/applications/$bin-link.desktop')"
+  espera "$b" "    system2('dpkg-deb -b tmpdeb $bin.deb;')"
+  espera "$b" "    os.rename('$bin.deb', '../$bin-%s.deb' % version)"
+  local corpo
+  corpo="$(corpo_funcao "$b" build_flutter_deb)"
+  [ -n "$corpo" ] || falha "não achei o corpo de build_flutter_deb"
+  if echo "$corpo" | grep -qi rustdesk; then falha "build_flutter_deb ainda menciona rustdesk"; fi
+  corpo="$(corpo_funcao "$b" generate_control_file)"
+  [ -n "$corpo" ] || falha "não achei o corpo de generate_control_file"
+  if echo "$corpo" | grep -qi rustdesk; then falha "generate_control_file ainda menciona rustdesk"; fi
+  # Fora dessas duas funções (build_deb_from_folder, modo --drm) nada muda.
+  espera "$b" "DRMTAP_DLOPEN_MARKER = b'/usr/lib/rustdesk/libdrmtap.so.0'"
+  espera "$b" "DRM_PACKAGE_NAME = 'rustdesk-unattended-wayland'"
+  espera "$b" "    system2('dpkg-deb -b tmpdeb rustdesk.deb;')"
+  # AppImage: id, name e o diretório do bundle no AppDir.
+  local y="$r/appimage/AppImageBuilder-x86_64.yml"
+  espera "$y" "    id: $bin"
+  espera "$y" "    name: $bin"
+  grep -qF -- ":\$APPDIR/usr/share/$bin/lib:" "$y" || falha "receita: APPDIR_LIBRARY_PATH sem usr/share/$bin/lib"
+  espera "$y" " - bsdtar -zxvf rustdesk.deb"
+}
+
+# Corpo da função generate_control_file / build_flutter_deb do build.py (mesmos
+# limites usados pelo script: até a próxima "def" ou constante de módulo).
+corpo_funcao() { # arquivo função
+  awk -v f="$2" '
+    $0 ~ "^def " f "\\(" { p = 1; next }
+    p && /^(def |[A-Z][A-Z_0-9]* =)/ { exit }
+    p' "$1"
+}
+
+# build.py sem o corpo das duas funções do .deb (para provar que o resto não mudou).
+build_py_fora_do_deb() { # arquivo
+  awk '
+    /^def generate_control_file\(/ { skip = 1; fim = "^def "; next }
+    /^def build_flutter_deb\(/ { skip = 1; fim = "^(def |[A-Z][A-Z_0-9]* =)"; next }
+    skip && $0 ~ fim { skip = 0 }
+    !skip' "$1"
 }
 
 # Linhas que não podem duplicar após rodar duas vezes.
@@ -102,8 +183,14 @@ for f in "${ALVOS[@]}"; do
   [ "$(wc -l < "$REPO/$f")" = "$(wc -l < "$R1/$f")" ] || falha "$f mudou de número de linhas"
 done
 # Nada além da linha esperada muda em build.py e na receita.
-[ "$(diff "$REPO/build.py" "$R1/build.py" | grep -c '^[<>]')" = 2 ] || falha "build.py: mais de uma linha alterada"
-[ "$(diff "$REPO/appimage/AppImageBuilder-x86_64.yml" "$R1/appimage/AppImageBuilder-x86_64.yml" | grep -c '^[<>]')" = 2 ] || falha "receita: mais de uma linha alterada"
+# build.py: fora das funções do .deb só a linha do service do macOS muda.
+[ "$(diff <(build_py_fora_do_deb "$REPO/build.py") <(build_py_fora_do_deb "$R1/build.py") | grep -c '^[<>]')" = 2 ] || falha "build.py: mudou algo além da linha do service e das funções do .deb"
+# Receita: exec, id, name e APPDIR_LIBRARY_PATH (4 linhas, 8 marcas no diff).
+[ "$(diff "$REPO/appimage/AppImageBuilder-x86_64.yml" "$R1/appimage/AppImageBuilder-x86_64.yml" | grep -c '^[<>]')" = 8 ] || falha "receita: esperadas exatamente 4 linhas alteradas"
+# Modelos do upstream e arquivos fora do escopo não mudam.
+for f in res/rustdesk.service res/rustdesk.desktop res/rustdesk-link.desktop; do
+  cmp -s "$REPO/$f" "$R1/$f" || falha "$f (modelo) foi alterado"
+done
 
 echo "== cliente"
 R2="$TMP/cliente"; nova_raiz "$R2"
@@ -171,6 +258,24 @@ R9="$TMP/semexec"; nova_raiz "$R9"
 sed -i '/^    exec: /d' "$R9/appimage/AppImageBuilder-x86_64.yml"
 SAIDA="$(PCEP_RAIZ="$R9" bash "$SCRIPT" cliente 2>&1)"; COD=$?
 [ "$COD" = 1 ] || falha "receita sem exec deveria sair com 1 (saiu $COD)"
+echo "$SAIDA" | grep -q 'AppImageBuilder-x86_64.yml' || falha "mensagem não cita a receita: $SAIDA"
+
+echo "== .deb: arquivo/trecho do upstream ausente (código 1, cita o arquivo)"
+R11="$TMP/semdebian"; nova_raiz "$R11"; rm "$R11/res/DEBIAN/postinst"
+SAIDA="$(PCEP_RAIZ="$R11" bash "$SCRIPT" cliente 2>&1)"; COD=$?
+[ "$COD" = 1 ] || falha "sem res/DEBIAN/postinst deveria sair com 1 (saiu $COD)"
+echo "$SAIDA" | grep -q 'res/DEBIAN/postinst' || falha "mensagem não cita postinst: $SAIDA"
+R12="$TMP/semmodelo"; nova_raiz "$R12"; rm "$R12/res/rustdesk-link.desktop"
+SAIDA="$(PCEP_RAIZ="$R12" bash "$SCRIPT" cliente 2>&1)"; COD=$?
+[ "$COD" = 1 ] || falha "sem modelo .desktop deveria sair com 1 (saiu $COD)"
+echo "$SAIDA" | grep -q 'rustdesk-link.desktop' || falha "mensagem não cita o modelo: $SAIDA"
+R13="$TMP/semmantenedor"; nova_raiz "$R13"; sed -i '/^Maintainer: /d' "$R13/build.py"
+SAIDA="$(PCEP_RAIZ="$R13" bash "$SCRIPT" cliente 2>&1)"; COD=$?
+[ "$COD" = 1 ] || falha "build.py sem Maintainer deveria sair com 1 (saiu $COD)"
+echo "$SAIDA" | grep -q 'build.py' || falha "mensagem não cita build.py: $SAIDA"
+R14="$TMP/semid"; nova_raiz "$R14"; sed -i '/^    id: /d' "$R14/appimage/AppImageBuilder-x86_64.yml"
+SAIDA="$(PCEP_RAIZ="$R14" bash "$SCRIPT" cliente 2>&1)"; COD=$?
+[ "$COD" = 1 ] || falha "receita sem id deveria sair com 1 (saiu $COD)"
 echo "$SAIDA" | grep -q 'AppImageBuilder-x86_64.yml' || falha "mensagem não cita a receita: $SAIDA"
 
 if [ "$FALHAS" -eq 0 ]; then echo "OK: todos os testes passaram"; else echo "$FALHAS falha(s)"; exit 1; fi

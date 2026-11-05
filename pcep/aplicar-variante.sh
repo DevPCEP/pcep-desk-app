@@ -54,12 +54,13 @@ fi
 # No Runner.rc o "&" literal precisa ser escrito "&&".
 dobra_e() { printf '%s' "${1//&/&&}"; }
 
-# Escapa o texto para o lado de substituição do sed (delimitador "|").
+# Escapa o texto para o lado de substituição do sed (delimitador "|" ou o
+# informado em $2).
 escapa_sed() {
-  local s="$1"
+  local s="$1" d="${2:-|}"
   s="${s//\\/\\\\}"
   s="${s//&/\\&}"
-  s="${s//|/\\|}"
+  s="${s//"$d"/\\$d}"
   printf '%s' "$s"
 }
 
@@ -146,10 +147,123 @@ substitui_trecho build.py "cópia do binário service para o .app" \
   '(cp -rf \.\./target/release/service \./build/macos/Build/Products/Release/)[A-Za-z0-9_]+(\.app/Contents/MacOS/)' \
   "\\1$(escapa_sed "$PRODUTO_MAC")\\2"
 
-# Receita do AppImage (Linux): build.py instala o bundle em usr/share/rustdesk/,
-# mas o executável dentro dele é o BINARY_NAME.
+
+# ---------------------------------------------------------------------------
+# Pacote .deb do Linux (build.py --flutter): todo "rustdesk" do empacotamento
+# vira o nome do binário da variante. O Rust já procura <app em minúsculas>
+# (serviço systemd, .desktop, ~/.config/<app>), então o nome tem de ser o mesmo.
+# ---------------------------------------------------------------------------
+
+# Nomes que já podem estar no lugar do "rustdesk" se o script rodar de novo
+# sobre a mesma árvore (idempotência e troca de variante). Se surgir uma
+# variante nova, acrescentar aqui (a mais longa não precisa vir primeiro: o
+# sed escolhe a maior correspondência).
+NOMES_BIN='rustdesk|pcepdeskequipe|pcepdesk'
+# Delimitador "~" nas trocas abaixo: as regexes usam "|" (alternância).
+BIN_SED="$(escapa_sed "$BINARIO" '~')"
+EXIBICAO_SED="$(escapa_sed "$EXIBICAO" '~')"
+
+# gera_do_modelo <modelo> <destino>
+#   Copia o arquivo do upstream (que continua intacto como modelo) trocando
+#   "RustDesk" pelo nome de exibição e "rustdesk" pelo binário. O modelo não é
+#   apagado: assim rodar de novo ou trocar de variante funciona, e os demais
+#   empacotamentos do upstream (que não usamos) continuam achando o arquivo.
+gera_do_modelo() {
+  local modelo="$1" destino="$2"
+  confere_arquivo "$modelo"
+  cp "$RAIZ/$modelo" "$RAIZ/$destino"
+  "$SED" -i -E "s~RustDesk~${EXIBICAO_SED}~g; s~rustdesk~${BIN_SED}~g" "$RAIZ/$destino"
+  if grep -qi rustdesk "$RAIZ/$destino"; then
+    echo "ERRO: sobrou 'rustdesk' em $destino" >&2
+    exit 1
+  fi
+  if ! grep -qF -- "$BINARIO" "$RAIZ/$destino"; then
+    echo "ERRO: $destino não recebeu o nome do binário (o modelo $modelo mudou?)" >&2
+    exit 1
+  fi
+}
+
+gera_do_modelo res/rustdesk.service      "res/$BINARIO.service"
+gera_do_modelo res/rustdesk.desktop      "res/$BINARIO.desktop"
+gera_do_modelo res/rustdesk-link.desktop "res/$BINARIO-link.desktop"
+
+# res/DEBIAN/*: scripts de instalação, trocados no lugar (build.py os copia
+# para dentro do pacote).
+for f in postinst preinst prerm postrm; do
+  confere_arquivo "res/DEBIAN/$f"
+  if ! grep -qE "$NOMES_BIN" "$RAIZ/res/DEBIAN/$f"; then
+    echo "ERRO: nenhum nome de binário encontrado em res/DEBIAN/$f (o upstream mudou?)" >&2
+    exit 1
+  fi
+  "$SED" -i -E "s~(${NOMES_BIN})~${BIN_SED}~g" "$RAIZ/res/DEBIAN/$f"
+  if grep -qi rustdesk "$RAIZ/res/DEBIAN/$f"; then
+    echo "ERRO: sobrou 'rustdesk' em res/DEBIAN/$f" >&2
+    exit 1
+  fi
+done
+
+# substitui_na_funcao <arquivo> <função> <regex-do-fim> <regex-ERE> <substituição>
+#   Troca (todas as ocorrências, com "~" como delimitador) só dentro do corpo
+#   da função Python, que vai da linha "def <função>(" até a linha que casa
+#   <regex-do-fim> (esta fica de fora). Falha se a regex não casar nada.
+substitui_na_funcao() {
+  local arquivo="$RAIZ/$1" funcao="$2" fim="$3" regex="$4" troca="$5"
+  local faixa="/^def ${funcao}\\(/,/${fim}/"
+  confere_arquivo "$1"
+  if ! "$SED" -n -E "${faixa}{/${fim}/!{\\~${regex}~p}}" "$arquivo" | grep -q .; then
+    echo "ERRO: ${regex} não encontrado na função ${funcao} de $1 (o upstream mudou?)" >&2
+    exit 1
+  fi
+  "$SED" -i -E "${faixa}{/${fim}/!{s~${regex}~${troca}~g}}" "$arquivo"
+}
+
+# sem_rustdesk_na_funcao <arquivo> <função> <regex-do-fim>
+sem_rustdesk_na_funcao() {
+  local arquivo="$RAIZ/$1" funcao="$2" fim="$3"
+  if "$SED" -n -E "/^def ${funcao}\\(/,/${fim}/{/${fim}/!p}" "$arquivo" | grep -qi rustdesk; then
+    echo "ERRO: sobrou 'rustdesk' na função ${funcao} de $1" >&2
+    exit 1
+  fi
+}
+
+# build.py: control do .deb (generate_control_file) e montagem do pacote
+# (build_flutter_deb). build_deb_from_folder e o modo --drm não são usados no CI.
+FIM_CONTROL='^def '
+# build_flutter_deb termina na próxima função ou na primeira constante de módulo
+# (DRMTAP_DLOPEN_MARKER, que tem um caminho do upstream e não pode mudar).
+FIM_DEB='^(def |[A-Z][A-Z_0-9]* =)'
+MANTENEDOR='PCEP <dev@pcepcontabil.com.br>'
+PAGINA='https://github.com/DevPCEP/pcep-desk-app'
+
+substitui_na_funcao build.py generate_control_file "$FIM_CONTROL" \
+  'Package: [A-Za-z0-9.+-]+' "Package: ${BIN_SED}"
+substitui_na_funcao build.py generate_control_file "$FIM_CONTROL" \
+  "^Maintainer: [^${CR}]*" "Maintainer: $(escapa_sed "$MANTENEDOR" '~')"
+substitui_na_funcao build.py generate_control_file "$FIM_CONTROL" \
+  "^Homepage: [^${CR}]*" "Homepage: $(escapa_sed "$PAGINA" '~')"
+substitui_na_funcao build.py generate_control_file "$FIM_CONTROL" \
+  "^Description: [^${CR}]*" "Description: ${EXIBICAO_SED}"
+sem_rustdesk_na_funcao build.py generate_control_file "$FIM_CONTROL"
+
+substitui_na_funcao build.py build_flutter_deb "$FIM_DEB" \
+  "(${NOMES_BIN})" "${BIN_SED}"
+sem_rustdesk_na_funcao build.py build_flutter_deb "$FIM_DEB"
+
+# Receita do AppImage: o .deb passa a instalar o bundle em usr/share/<binario>/,
+# e o executável dentro dele é o BINARY_NAME. Também troca o identificador, o
+# nome e o diretório do bundle no AppDir.
+# O `bsdtar rustdesk.deb` da receita fica: o workflow renomeia o .deb para isso.
 substitui_trecho appimage/AppImageBuilder-x86_64.yml "exec do AppImage" \
-  "^(    exec: usr/share/rustdesk/)[A-Za-z0-9_-]+(${CR}?)\$" \
+  "^(    exec: usr/share/)[A-Za-z0-9_-]+/[A-Za-z0-9_-]+(${CR}?)\$" \
+  "\\1$(escapa_sed "$BINARIO")/$(escapa_sed "$BINARIO")\\2"
+substitui_trecho appimage/AppImageBuilder-x86_64.yml "app_info.id do AppImage" \
+  "^(    id: )[A-Za-z0-9_-]+(${CR}?)\$" \
+  "\\1$(escapa_sed "$BINARIO")\\2"
+substitui_trecho appimage/AppImageBuilder-x86_64.yml "app_info.name do AppImage" \
+  "^(    name: )[A-Za-z0-9_-]+(${CR}?)\$" \
+  "\\1$(escapa_sed "$BINARIO")\\2"
+substitui_trecho appimage/AppImageBuilder-x86_64.yml "APPDIR_LIBRARY_PATH do AppImage" \
+  '(:\$APPDIR/usr/share/)[A-Za-z0-9_-]+(/lib:)' \
   "\\1$(escapa_sed "$BINARIO")\\2"
 
 echo "Variante '$1' aplicada em $RAIZ"
