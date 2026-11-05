@@ -46,11 +46,32 @@ Entregáveis (nomes fixos, sem versão, para links estáveis `releases/latest/do
 
 ### Pendências do empacotamento
 
-- **Sem assinatura de código em nenhuma plataforma.** Os passos de assinatura (Windows), codesign e notarização (macOS) do upstream foram deixados de fora: não há certificados. Windows mostra o aviso do SmartScreen e o macOS exige liberar o app em Ajustes → Privacidade e Segurança (ou `xattr -d com.apple.quarantine`).
+- **Sem assinatura de código em nenhuma plataforma por enquanto.** O Windows já está preparado (ver "Assinatura do Windows" abaixo) e passa a assinar quando os segredos existirem; codesign e notarização (macOS) do upstream foram deixados de fora. Sem certificado, o Windows mostra o aviso do SmartScreen e o macOS exige liberar o app em Ajustes → Privacidade e Segurança (ou `xattr -d com.apple.quarantine`).
 - `pcep/aplicar-variante.sh` ajusta, além dos nomes, os arquivos do upstream que fixam o nome `rustdesk`: `build.py` (caminho `RustDesk.app` ao copiar o binário `service`, macOS, e as funções `generate_control_file` e `build_flutter_deb` do `.deb`) e `appimage/AppImageBuilder-x86_64.yml` (`exec`, `app_info.id/name` e `APPDIR_LIBRARY_PATH`, todos apontando para `usr/share/<binario>/`). Cada ajuste falha se a linha do upstream não casar mais, em vez de gerar um pacote quebrado. O script precisa de GNU sed (`brew install gnu-sed` no macOS) e tolera arquivos CRLF.
 - **Pacote `.deb` com nomes próprios.** O script gera `res/<binario>.service`, `res/<binario>.desktop` e `res/<binario>-link.desktop` a partir dos modelos `res/rustdesk.*` (que ficam intactos) e troca `rustdesk` por `<binario>` em `res/DEBIAN/*`. Resultado: `Package: <binario>`, `Maintainer: PCEP <dev@pcepcontabil.com.br>`, instalação em `/usr/share/<binario>/`, link `/usr/bin/<binario>`, serviço systemd `<binario>.service` (habilitado e iniciado no `postinst`, nas duas variantes) e `/usr/share/applications/<binario>.desktop`. Não há `Conflicts/Replaces` com o `rustdesk` oficial: os dois podem estar instalados juntos. Só a biblioteca interna `lib/librustdesk.so` mantém o nome (o Dart a carrega por esse nome). O job `linux` instala e remove o `.deb` no runner como teste antes de publicá-lo. Não foram adaptados `build_deb_from_folder` e o modo `--drm` do `build.py`, que o CI não usa.
 - `res/scalable.svg` (ícone do menu no Linux) não é gerado por `pcep/icones/gerar.sh`; continua sendo o do RustDesk.
 - O executável portátil do Windows (`libs/portable`) herda o ícone de `res/icon.ico` e os metadados de versão (`ProductName`, `FileDescription`) de `libs/portable/Cargo.toml`, ambos já ajustados à variante.
+
+## Assinatura do Windows
+
+O job `windows` assina com `signtool` (via `pcep/assinar-windows.ps1`) os `.exe`/`.dll` de `./rustdesk` antes do empacotamento (ignora `drivers\` e arquivos já com assinatura válida) e, depois, o executável portátil final. É opcional: sem os segredos abaixo o passo só avisa "sem certificado" e o build segue com executáveis não assinados.
+
+Para ligar: em Settings → Secrets and variables → Actions → Secrets, criar
+
+- `PCEP_ASSINATURA_PFX`: o certificado de code signing em PFX, em base64 (`base64 -w0 certificado.pfx`);
+- `PCEP_ASSINATURA_SENHA`: a senha do PFX.
+
+Os dois precisam existir juntos; só um deles definido faz o build falhar. A assinatura usa SHA-256 e carimbo de tempo da DigiCert (`http://timestamp.digicert.com`), e o script confere que cada arquivo assinado ficou com certificado.
+
+Certificados atuais emitidos na nuvem (Certum na nuvem, Azure Artifact Signing) não exportam PFX. Nesse caso só o trecho do `signtool` dentro de `pcep/assinar-windows.ps1` muda (ponto único); o restante (passos do workflow, escolha dos arquivos, conferência) continua igual.
+
+Testar a mecânica sem certificado real (certificado autoassinado criado na hora, só em execução manual; nunca vale em tag):
+
+```
+gh workflow run pcep-build.yml -R DevPCEP/pcep-desk-app -f variante=cliente -f assinatura_teste=true
+```
+
+Nesse modo o workflow também confere que os executáveis ficaram com certificado e que uma senha errada faz o script falhar. O status da assinatura fica `NotTrusted`/`UnknownError` por ser autoassinada; isso é esperado, e o artefato desse teste não deve ser distribuído.
 
 ## Sincronizar com o upstream
 
