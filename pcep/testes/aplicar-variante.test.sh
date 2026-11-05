@@ -13,6 +13,7 @@ ALVOS=(
   flutter/windows/runner/Runner.rc
   flutter/windows/CMakeLists.txt
   flutter/linux/CMakeLists.txt
+  flutter/linux/my_application.cc
   flutter/macos/Runner/Configs/AppInfo.xcconfig
   build.py
   appimage/AppImageBuilder-x86_64.yml
@@ -80,6 +81,12 @@ verifica_variante() { # raiz binario exibicao exibicao_rc identificador produto_
   espera "$r/flutter/windows/CMakeLists.txt" "project(rustdesk LANGUAGES CXX)"
   espera "$r/flutter/linux/CMakeLists.txt" "set(BINARY_NAME \"$bin\")"
   espera "$r/flutter/linux/CMakeLists.txt" "set(APPLICATION_ID \"$id\")"
+  # Título GTK do Linux: nome de exibição nas duas chamadas; o nome do ícone não muda.
+  local gtk="$r/flutter/linux/my_application.cc"
+  espera "$gtk" "    gtk_header_bar_set_title(header_bar, \"$exib\");"
+  espera "$gtk" "    gtk_window_set_title(window, \"$exib\");"
+  if grep -qE 'set_title\(.*"rustdesk"' "$gtk"; then falha "my_application.cc: título ainda é \"rustdesk\""; fi
+  grep -qF 'gtk_icon_theme_load_icon(theme, "rustdesk",' "$gtk" || falha "my_application.cc: o nome do ícone foi alterado"
   espera "$r/flutter/macos/Runner/Configs/AppInfo.xcconfig" "PRODUCT_NAME = $mac"
   espera "$r/flutter/macos/Runner/Configs/AppInfo.xcconfig" "PRODUCT_BUNDLE_IDENTIFIER = $id"
   # build.py (macOS): o binário `service` é copiado para dentro do .app da variante.

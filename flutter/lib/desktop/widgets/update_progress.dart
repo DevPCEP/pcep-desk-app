@@ -43,7 +43,7 @@ Future<void> handleUpdate(String releasePageUrl) async {
   gFFI.dialogManager.dismissAll();
   gFFI.dialogManager.show((setState, close, context) {
     return CustomAlertDialog(
-        title: Text(translate('Downloading {$appName}')),
+        title: Text(translate('Downloading {$appDisplayName}')),
         content: UpdateProgress(
                 releasePageUrl, verifiedDownloadUrl, downloadId, onCanceled)
             .marginSymmetric(horizontal: 8)
@@ -267,8 +267,8 @@ class UpdateProgressState extends State<UpdateProgress> {
     msgBox(
       gFFI.sessionId,
       'custom-nocancel',
-      '{$appName} Update',
-      '{$appName}-to-update-tip',
+      '{$appDisplayName} Update',
+      '{$appDisplayName}-to-update-tip',
       '',
       gFFI.dialogManager,
       onSubmit: () async {

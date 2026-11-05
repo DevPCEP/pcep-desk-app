@@ -22,6 +22,16 @@ pub use linux::is_supported;
 pub use client::*;
 pub use server::*;
 
+// PCEP: título da janela do quadro branco (aparece no alternador de janelas). Só o build PCEP
+// usa o nome de exibição; fora dele continua o título do upstream.
+fn window_title() -> String {
+    if pcep::embedded().is_some() {
+        format!("{} - quadro", crate::get_app_display_name())
+    } else {
+        "RustDesk whiteboard".to_owned()
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "t", content = "c")]
 pub enum CustomEvent {

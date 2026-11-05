@@ -4276,6 +4276,10 @@ String get appName {
   return _appName;
 }
 
+// PCEP: nome para textos da interface ("Pc&P Desk" / "Pc&P Desk Equipe"). Não use para
+// caminhos, IDs ou comparações: para isso existe `appName` (nome técnico).
+String get appDisplayName => bind.mainGetAppDisplayNameSync();
+
 String getConnectionText(bool secure, bool direct, String streamType) {
   String connectionText;
   if (secure && direct) {

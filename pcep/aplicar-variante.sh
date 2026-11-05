@@ -136,6 +136,16 @@ substitui flutter/windows/CMakeLists.txt "" 'set\(BINARY_NAME[[:space:]]' "set(B
 substitui flutter/linux/CMakeLists.txt "" 'set\(BINARY_NAME[[:space:]]'    "set(BINARY_NAME \"$BINARIO\")"
 substitui flutter/linux/CMakeLists.txt "" 'set\(APPLICATION_ID[[:space:]]' "set(APPLICATION_ID \"$IDENTIFICADOR\")"
 
+# Título da janela no Linux (GTK): o literal "rustdesk" vira o nome de exibição.
+# O nome do ícone ("rustdesk" em gtk_icon_theme_load_icon) não muda. Casa
+# qualquer texto entre aspas para continuar idempotente ao rodar de novo.
+substitui_trecho flutter/linux/my_application.cc "título gtk_header_bar_set_title" \
+  '(gtk_header_bar_set_title\(header_bar, )"[^"]*"(\))' \
+  "\\1\"$(escapa_sed "$EXIBICAO")\"\\2"
+substitui_trecho flutter/linux/my_application.cc "título gtk_window_set_title" \
+  '(gtk_window_set_title\(window, )"[^"]*"(\))' \
+  "\\1\"$(escapa_sed "$EXIBICAO")\"\\2"
+
 # macOS.
 XC=flutter/macos/Runner/Configs/AppInfo.xcconfig
 substitui "$XC" "" 'PRODUCT_NAME[[:space:]]*='              "PRODUCT_NAME = $PRODUTO_MAC"
