@@ -137,14 +137,19 @@ substitui flutter/linux/CMakeLists.txt "" 'set\(BINARY_NAME[[:space:]]'    "set(
 substitui flutter/linux/CMakeLists.txt "" 'set\(APPLICATION_ID[[:space:]]' "set(APPLICATION_ID \"$IDENTIFICADOR\")"
 
 # Título da janela no Linux (GTK): o literal "rustdesk" vira o nome de exibição.
-# O nome do ícone ("rustdesk" em gtk_icon_theme_load_icon) não muda. Casa
-# qualquer texto entre aspas para continuar idempotente ao rodar de novo.
+# Casa qualquer texto entre aspas para continuar idempotente ao rodar de novo.
 substitui_trecho flutter/linux/my_application.cc "título gtk_header_bar_set_title" \
   '(gtk_header_bar_set_title\(header_bar, )"[^"]*"(\))' \
   "\\1\"$(escapa_sed "$EXIBICAO")\"\\2"
 substitui_trecho flutter/linux/my_application.cc "título gtk_window_set_title" \
   '(gtk_window_set_title\(window, )"[^"]*"(\))' \
   "\\1\"$(escapa_sed "$EXIBICAO")\"\\2"
+# Ícone da janela no Linux: o .deb instala o ícone como <binario>.png/.svg no
+# tema hicolor, então o nome procurado no tema é o do binário (senão a janela
+# fica sem ícone, ou mostra o do RustDesk original se estiver instalado).
+substitui_trecho flutter/linux/my_application.cc "ícone gtk_icon_theme_load_icon" \
+  '(gtk_icon_theme_load_icon\(theme, )"[^"]*"(,)' \
+  "\\1\"$(escapa_sed "$BINARIO")\"\\2"
 
 # macOS.
 XC=flutter/macos/Runner/Configs/AppInfo.xcconfig
@@ -271,6 +276,14 @@ substitui_trecho appimage/AppImageBuilder-x86_64.yml "app_info.id do AppImage" \
   "\\1$(escapa_sed "$BINARIO")\\2"
 substitui_trecho appimage/AppImageBuilder-x86_64.yml "app_info.name do AppImage" \
   "^(    name: )[A-Za-z0-9_-]+(${CR}?)\$" \
+  "\\1$(escapa_sed "$BINARIO")\\2"
+substitui_trecho appimage/AppImageBuilder-x86_64.yml "app_info.icon do AppImage" \
+  "^(    icon: )[A-Za-z0-9_-]+(${CR}?)\$" \
+  "\\1$(escapa_sed "$BINARIO")\\2"
+# Ícones copiados para o AppDir (hicolor/<tamanho>/apps/<nome>.png e scalable/.../<nome>.svg):
+# o nome tem de ser o mesmo que o .desktop (Icon=<binario>) procura.
+substitui_trecho appimage/AppImageBuilder-x86_64.yml "ícones copiados para o AppDir" \
+  '(/apps/)[A-Za-z0-9_-]+(\.[a-z]+)' \
   "\\1$(escapa_sed "$BINARIO")\\2"
 substitui_trecho appimage/AppImageBuilder-x86_64.yml "APPDIR_LIBRARY_PATH do AppImage" \
   '(:\$APPDIR/usr/share/)[A-Za-z0-9_-]+(/lib:)' \

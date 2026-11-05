@@ -86,7 +86,8 @@ verifica_variante() { # raiz binario exibicao exibicao_rc identificador produto_
   espera "$gtk" "    gtk_header_bar_set_title(header_bar, \"$exib\");"
   espera "$gtk" "    gtk_window_set_title(window, \"$exib\");"
   if grep -qE 'set_title\(.*"rustdesk"' "$gtk"; then falha "my_application.cc: título ainda é \"rustdesk\""; fi
-  grep -qF 'gtk_icon_theme_load_icon(theme, "rustdesk",' "$gtk" || falha "my_application.cc: o nome do ícone foi alterado"
+  grep -qF "gtk_icon_theme_load_icon(theme, \"$bin\"," "$gtk" || falha "my_application.cc: ícone não procura \"$bin\" no tema"
+  if grep -qF '"rustdesk"' "$gtk"; then falha "my_application.cc: ainda contém \"rustdesk\" entre aspas"; fi
   espera "$r/flutter/macos/Runner/Configs/AppInfo.xcconfig" "PRODUCT_NAME = $mac"
   espera "$r/flutter/macos/Runner/Configs/AppInfo.xcconfig" "PRODUCT_BUNDLE_IDENTIFIER = $id"
   # build.py (macOS): o binário `service` é copiado para dentro do .app da variante.
@@ -146,6 +147,10 @@ verifica_deb() { # raiz binario exibicao
   local y="$r/appimage/AppImageBuilder-x86_64.yml"
   espera "$y" "    id: $bin"
   espera "$y" "    name: $bin"
+  espera "$y" "    icon: $bin"
+  grep -qF "AppDir/usr/share/icons/hicolor/scalable/apps/$bin.svg" "$y" || falha "receita: ícone .svg sem o nome $bin"
+  grep -qF "apps/$bin.png; done" "$y" || falha "receita: ícones .png sem o nome $bin"
+  if grep -E '^[^#]*/apps/rustdesk\.' "$y" | grep -q .; then falha "receita: ainda copia ícone como rustdesk.*"; fi
   grep -qF -- ":\$APPDIR/usr/share/$bin/lib:" "$y" || falha "receita: APPDIR_LIBRARY_PATH sem usr/share/$bin/lib"
   espera "$y" " - bsdtar -zxvf rustdesk.deb"
 }
@@ -192,8 +197,8 @@ done
 # Nada além da linha esperada muda em build.py e na receita.
 # build.py: fora das funções do .deb só a linha do service do macOS muda.
 [ "$(diff <(build_py_fora_do_deb "$REPO/build.py") <(build_py_fora_do_deb "$R1/build.py") | grep -c '^[<>]')" = 2 ] || falha "build.py: mudou algo além da linha do service e das funções do .deb"
-# Receita: exec, id, name e APPDIR_LIBRARY_PATH (4 linhas, 8 marcas no diff).
-[ "$(diff "$REPO/appimage/AppImageBuilder-x86_64.yml" "$R1/appimage/AppImageBuilder-x86_64.yml" | grep -c '^[<>]')" = 8 ] || falha "receita: esperadas exatamente 4 linhas alteradas"
+# Receita: exec, id, name, icon, 2 linhas de cópia de ícones e APPDIR_LIBRARY_PATH (7 linhas, 14 marcas no diff).
+[ "$(diff "$REPO/appimage/AppImageBuilder-x86_64.yml" "$R1/appimage/AppImageBuilder-x86_64.yml" | grep -c '^[<>]')" = 14 ] || falha "receita: esperadas exatamente 7 linhas alteradas"
 # Modelos do upstream e arquivos fora do escopo não mudam.
 for f in res/rustdesk.service res/rustdesk.desktop res/rustdesk-link.desktop; do
   cmp -s "$REPO/$f" "$R1/$f" || falha "$f (modelo) foi alterado"
