@@ -3098,14 +3098,13 @@ int versionCmp(String v1, String v2) {
 }
 
 String getWindowName({WindowType? overrideType}) {
-  // PCEP: títulos de janela mostram o nome de exibição. Exceção: a janela principal no
-  // Windows mantém o nome técnico, pois o runner (main.cpp) e `send_message_to_hnwd`
-  // (core_main.rs) a localizam pelo título == get_app_name() para links de URI/instância única.
-  final techName = bind.mainGetAppNameSync();
+  // PCEP: títulos de janela mostram o nome de exibição. No Windows, o runner (main.cpp, via
+  // get_rustdesk_app_name) e `send_message_to_hnwd` (core_main.rs) localizam a janela principal
+  // pelo título; os dois também usam o nome de exibição, então os três precisam continuar iguais.
   final name = bind.mainGetAppDisplayNameSync();
   switch (overrideType ?? kWindowType) {
     case WindowType.Main:
-      return isWindows ? techName : name;
+      return name;
     case WindowType.FileTransfer:
       return "File Transfer - $name";
     case WindowType.ViewCamera:
