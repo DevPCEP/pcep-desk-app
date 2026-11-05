@@ -393,7 +393,7 @@ jobs:
         env:
           PCEP_ASSINATURA_PFX: ${{ secrets.PCEP_ASSINATURA_PFX }}
           PCEP_ASSINATURA_SENHA: ${{ secrets.PCEP_ASSINATURA_SENHA }}
-          PCEP_TESTE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.assinatura_teste == 'true' }}
+          PCEP_TESTE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.assinatura_teste == 'true' && !startsWith(github.ref, 'refs/tags/') }}
         run: |
           $params = @{ Caminho = './rustdesk'; Teste = ($env:PCEP_TESTE -eq 'true') }
           ./pcep/assinar-windows.ps1 @params
@@ -416,16 +416,17 @@ jobs:
         env:
           PCEP_ASSINATURA_PFX: ${{ secrets.PCEP_ASSINATURA_PFX }}
           PCEP_ASSINATURA_SENHA: ${{ secrets.PCEP_ASSINATURA_SENHA }}
-          PCEP_TESTE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.assinatura_teste == 'true' }}
+          PCEP_TESTE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.assinatura_teste == 'true' && !startsWith(github.ref, 'refs/tags/') }}
         run: |
           $params = @{ Caminho = "./entregaveis/$env:ENTREGAVEL"; Teste = ($env:PCEP_TESTE -eq 'true') }
           ./pcep/assinar-windows.ps1 @params
 
       - name: Conferir assinatura (modo teste)
-        # PCEP: só em execução manual com assinatura_teste. O certificado é
-        # autoassinado (status NotTrusted/UnknownError é esperado); o artefato
-        # deste modo serve apenas para o teste.
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.assinatura_teste == 'true'
+        # PCEP: só em execução manual com assinatura_teste, nunca em ref de tag
+        # (mesma regra de PCEP_TESTE). O certificado é autoassinado (status
+        # NotTrusted/UnknownError é esperado); o artefato deste modo serve
+        # apenas para o teste.
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.assinatura_teste == 'true' && !startsWith(github.ref, 'refs/tags/')
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -443,9 +444,13 @@ jobs:
               Copy-Item -LiteralPath "./entregaveis/$env:ENTREGAVEL" -Destination $alvo
               $env:PCEP_ASSINATURA_PFX = [Convert]::ToBase64String([IO.File]::ReadAllBytes($pfx))
               $env:PCEP_ASSINATURA_SENHA = 'errada'
-              pwsh -NoProfile -File ./pcep/assinar-windows.ps1 -Caminho $alvo
-              if ($LASTEXITCODE -eq 0) { throw 'O script deveria falhar com senha errada, mas saiu com 0.' }
-              Write-Host "Senha errada rejeitada como esperado (saída $LASTEXITCODE)."
+              $saida = pwsh -NoProfile -File ./pcep/assinar-windows.ps1 -Caminho $alvo 2>&1 | Out-String
+              $codigo = $LASTEXITCODE
+              Write-Host $saida
+              if ($codigo -eq 0) { throw 'O script deveria falhar com senha errada, mas saiu com 0.' }
+              # A causa precisa ser a falha do signtool, não outro erro qualquer.
+              if ($saida -notmatch 'Falha ao assinar') { throw 'O script falhou, mas não pela assinatura (esperado "Falha ao assinar").' }
+              Write-Host "Senha errada rejeitada como esperado (saída $codigo)."
           } finally {
               Remove-Item -LiteralPath $pfx, $alvo -Force -ErrorAction SilentlyContinue
               Remove-Item "Cert:\CurrentUser\My\$($cert.Thumbprint)" -Force -ErrorAction SilentlyContinue
@@ -1024,7 +1029,9 @@ jobs:
   # ---------------------------------------------------------------------------
   release:
     name: Publicar release
-    if: startsWith(github.ref, 'refs/tags/pcep-v')
+    # PCEP: nunca publica release de execução com assinatura_teste (certificado
+    # autoassinado), mesmo que o dispatch tenha sido feito sobre uma tag.
+    if: startsWith(github.ref, 'refs/tags/pcep-v') && github.event.inputs.assinatura_teste != 'true'
     needs: [windows, linux, appimage, macos]
     runs-on: ubuntu-22.04
     permissions:
