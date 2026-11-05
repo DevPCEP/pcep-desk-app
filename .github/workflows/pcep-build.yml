@@ -440,7 +440,7 @@ jobs:
           $alvo = Join-Path $env:RUNNER_TEMP 'pcep-senha-errada.exe'
           $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=PCEP Teste Senha Errada' -CertStoreLocation Cert:\CurrentUser\My
           try {
-              Export-PfxCertificate -Cert $cert -FilePath $pfx -Password (ConvertTo-SecureString $senhaCerta -AsPlainText -Force) | Out-Null
+              Export-PfxCertificate -Cert "Cert:\CurrentUser\My\$($cert.Thumbprint)" -FilePath $pfx -Password (ConvertTo-SecureString $senhaCerta -AsPlainText -Force) | Out-Null
               Copy-Item -LiteralPath "./entregaveis/$env:ENTREGAVEL" -Destination $alvo
               $env:PCEP_ASSINATURA_PFX = [Convert]::ToBase64String([IO.File]::ReadAllBytes($pfx))
               $env:PCEP_ASSINATURA_SENHA = 'errada'
@@ -701,6 +701,7 @@ jobs:
           BIN: ${{ matrix.job.binario }}
         run: |
           set -euo pipefail
+          sudo apt-get update -y
           if ! sudo apt-get install -y "./deb/${DEB}"; then
             systemctl status "${BIN}" --no-pager || true
             journalctl -u "${BIN}" --no-pager -n 50 || true

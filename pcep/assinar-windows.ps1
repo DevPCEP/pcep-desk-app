@@ -34,9 +34,9 @@ if (-not $signtool) { throw 'signtool.exe não encontrado em "Windows Kits\10\bi
 if (-not (Test-Path -LiteralPath $Caminho)) { throw "Caminho não existe: $Caminho" }
 $item = Get-Item -LiteralPath $Caminho
 if ($item.PSIsContainer) {
-    # Ignora drivers\ (drivers de terceiros, com assinatura própria).
+    # Ignora drivers\ e usbmmidd_v2\ (drivers de terceiros, com assinatura própria).
     $arquivos = @(Get-ChildItem -LiteralPath $item.FullName -Recurse -File -Include *.exe, *.dll |
-        Where-Object { $_.FullName -notmatch '[\\/]drivers[\\/]' })
+        Where-Object { $_.FullName -notmatch '[\\/](drivers|usbmmidd_v2)[\\/]' })
 } else {
     $arquivos = @($item)
 }
@@ -55,7 +55,7 @@ try {
         $senha = -join ([Security.Cryptography.RandomNumberGenerator]::GetBytes(24) | ForEach-Object { $_.ToString('x2') })
         $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=PCEP Teste de Assinatura' -CertStoreLocation Cert:\CurrentUser\My
         $thumb = $cert.Thumbprint
-        Export-PfxCertificate -Cert $cert -FilePath $pfx -Password (ConvertTo-SecureString $senha -AsPlainText -Force) | Out-Null
+        Export-PfxCertificate -Cert "Cert:\CurrentUser\My\$thumb" -FilePath $pfx -Password (ConvertTo-SecureString $senha -AsPlainText -Force) | Out-Null
     } else {
         [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($pfxB64))
     }
@@ -79,6 +79,10 @@ try {
         if (-not (Get-AuthenticodeSignature -LiteralPath $arq.FullName).SignerCertificate) {
             throw "Sem assinatura após signtool: $($arq.FullName)"
         }
+    }
+    $raiz = if ($item.PSIsContainer) { $item.FullName } else { $item.DirectoryName }
+    foreach ($arq in $arquivos) {
+        Write-Host "  assinado: $([IO.Path]::GetRelativePath($raiz, $arq.FullName))"
     }
     Write-Host "Assinatura: $($arquivos.Count) arquivo(s) assinado(s)."
 } finally {
