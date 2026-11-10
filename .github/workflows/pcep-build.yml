@@ -455,6 +455,9 @@ jobs:
               Remove-Item -LiteralPath $pfx, $alvo -Force -ErrorAction SilentlyContinue
               Remove-Item "Cert:\CurrentUser\My\$($cert.Thumbprint)" -Force -ErrorAction SilentlyContinue
           }
+          # O passo pwsh termina com o $LASTEXITCODE do último comando externo,
+          # que aqui é o 1 esperado do teste da senha errada.
+          exit 0
 
       - name: Publicar artifact ${{ env.ENTREGAVEL }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
