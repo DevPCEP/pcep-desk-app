@@ -842,7 +842,9 @@ jobs:
         alvo:
           - {
               target: aarch64-apple-darwin,
-              os: macos-14,
+              # PCEP: macos-14 foi aposentado pelo GitHub ("configuration
+              # 'macos-14-arm64-us-default' is not supported", 2026-11-10).
+              os: macos-15,
               extra-build-args: "--screencapturekit",
               arch: aarch64,
               arch_nome: arm64,
