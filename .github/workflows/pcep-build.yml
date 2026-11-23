@@ -843,8 +843,11 @@ jobs:
           - {
               target: aarch64-apple-darwin,
               # PCEP: macos-14 foi aposentado pelo GitHub ("configuration
-              # 'macos-14-arm64-us-default' is not supported", 2026-11-10).
-              os: macos-15,
+              # 'macos-14-arm64-us-default' is not supported", 2026-11-10), e
+              # macos-15 / macos-26 nunca recebem máquina neste repositório (sonda
+              # pcep-sonda-macos.yml, 2026-11-23). macos-latest entrega Apple
+              # Silicon (imagem macos-26-arm64) e é o rótulo que o upstream usa.
+              os: macos-latest,
               extra-build-args: "--screencapturekit",
               arch: aarch64,
               arch_nome: arm64,
