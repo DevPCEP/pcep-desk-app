@@ -1037,7 +1037,13 @@ jobs:
     name: Publicar release
     # PCEP: nunca publica release de execução com assinatura_teste (certificado
     # autoassinado), mesmo que o dispatch tenha sido feito sobre uma tag.
-    if: startsWith(github.ref, 'refs/tags/pcep-v') && github.event.inputs.assinatura_teste != 'true'
+    # PCEP: publica mesmo se o macOS falhar (o GitHub vive sem máquina Mac arm64
+    # disponível); Windows, Linux e AppImage continuam obrigatórios. O .dmg entra
+    # na release quando o job do macOS conseguir rodar.
+    if: >-
+      !cancelled() &&
+      startsWith(github.ref, 'refs/tags/pcep-v') && github.event.inputs.assinatura_teste != 'true' &&
+      needs.windows.result == 'success' && needs.linux.result == 'success' && needs.appimage.result == 'success'
     needs: [windows, linux, appimage, macos]
     runs-on: ubuntu-22.04
     permissions:
@@ -1055,7 +1061,13 @@ jobs:
         run: |
           set -euo pipefail
           ls -l ./entregaveis
-          [ "$(ls ./entregaveis | wc -l)" = "8" ] || { echo "::error::esperados 8 entregáveis"; exit 1; }
+          # Windows e Linux são obrigatórios; os .dmg do macOS são opcionais.
+          for app in PcepDesk PcepDeskEquipe; do
+            for arq in "$app-Windows-x64.exe" "$app-Linux-x86_64.AppImage" "$app-Linux-x86_64.deb"; do
+              [ -f "./entregaveis/$arq" ] || { echo "::error::entregável ausente: $arq"; exit 1; }
+            done
+            [ -f "./entregaveis/$app-macOS-arm64.dmg" ] || echo "::warning::sem $app-macOS-arm64.dmg nesta release (job do macOS falhou)"
+          done
 
       - name: Publish Release
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
@@ -1064,7 +1076,7 @@ jobs:
           name: Pc&P Desk ${{ github.ref_name }}
           fail_on_unmatched_files: true
           body: |
-            Pc&P Desk (cliente) e Pc&P Desk Equipe (colaborador) para Windows x64, Linux x86_64 e macOS Apple Silicon (arm64).
+            Pc&P Desk (cliente) e Pc&P Desk Equipe (colaborador) para Windows x64, Linux x86_64 e, quando disponível nesta release, macOS Apple Silicon (arm64).
 
             Código-fonte: https://github.com/DevPCEP/pcep-desk-app
           files: |
