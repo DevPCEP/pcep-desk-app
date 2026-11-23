@@ -63,5 +63,9 @@ cp "$RAIZ/res/mac-tray-dark-x2.png" "$RAIZ/res/mac-tray-light-x2.png"
 cp "$ICONE" "$RAIZ/flutter/assets/icon.svg"
 sed 's/currentColor/#111528/g' "$LOGO" > "$TMP/logo-escuro.svg"
 rsvg-convert -w 512 "$TMP/logo-escuro.svg" -o "$RAIZ/flutter/assets/logo.png"
+# Versão branca para o tema escuro: o app procura assets/logo_dark.png quando
+# o tema é escuro e usa logo.png se não achar (ver _Logo em flutter/lib/common.dart).
+sed 's/currentColor/#ffffff/g' "$LOGO" > "$TMP/logo-branco.svg"
+rsvg-convert -w 512 "$TMP/logo-branco.svg" -o "$RAIZ/flutter/assets/logo_dark.png"
 
 echo "Ícones do Pc&P Desk gerados em $RAIZ"
