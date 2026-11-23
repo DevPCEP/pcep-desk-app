@@ -1,0 +1,27 @@
+# PCEP: sonda para descobrir quais máquinas macOS o GitHub entrega a este
+# repositório (o job macOS do pcep-build.yml nunca recebe máquina com macos-15).
+# Não compila nada: só pede cada tipo de máquina e mostra o que veio.
+# Só roda à mão (Actions → "Pc&P Desk - sonda macOS" → Run workflow).
+name: Pc&P Desk - sonda macOS
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sonda:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-latest, macos-26, macos-15-intel]
+    steps:
+      - name: Mostrar a máquina recebida
+        run: |
+          uname -a
+          sw_vers
+          sysctl -n machdep.cpu.brand_string
